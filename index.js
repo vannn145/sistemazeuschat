@@ -1,18 +1,26 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
+// Forçar que as variáveis do .env sobrescrevam variáveis de ambiente já definidas
+require('dotenv').config({ override: true });
 
 const dbService = require('./src/services/database');
 const whatsappService = require('./src/services/whatsapp-hybrid');
+const cronService = require('./src/services/cron');
 const messageRoutes = require('./src/routes/messages');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+    verify: (req, res, buf) => {
+        // Guardar corpo bruto para verificar assinatura do webhook
+        req.rawBody = buf.toString();
+    }
+}));
 app.use(express.static('public'));
 
 // Routes
@@ -37,6 +45,13 @@ app.get('/health', (req, res) => {
 async function startServer() {
     try {
         console.log('🚀 Iniciando Sistema de Disparo WhatsApp...');
+        // Log rápido de configuração ativa para evitar confusão de ambiente
+        console.log('⚙️  Config WhatsApp em uso:', {
+            MODE: process.env.WHATSAPP_MODE,
+            PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
+            WABA_ID: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID,
+            API_VERSION: process.env.WHATSAPP_API_VERSION
+        });
         
         // Testar conexão com banco (opcional)
         try {
@@ -50,10 +65,20 @@ async function startServer() {
         // Inicializar WhatsApp (sem conectar automaticamente)
         console.log('📱 Serviço WhatsApp inicializado');
         
-        app.listen(PORT, () => {
-            console.log(`🌐 Servidor rodando em http://localhost:${PORT}`);
+        app.listen(PORT, HOST, () => {
+            const publicHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
+            console.log(`🌐 Servidor rodando em http://${publicHost}:${PORT}`);
             console.log('📋 Interface de controle disponível na página inicial');
-            console.log(`🔗 Acesse: http://localhost:${PORT}`);
+            console.log(`🔗 Acesse: http://${publicHost}:${PORT}`);
+            // Iniciar cron se habilitado
+            if (String(process.env.CRON_ENABLED || 'false').toLowerCase() === 'true') {
+                const started = cronService.start();
+                if (started) {
+                    console.log('⏱️  Cron habilitado. Intervalo(ms):', process.env.CRON_INTERVAL_MS || 60000);
+                }
+            } else {
+                console.log('⏸️  Cron desabilitado (defina CRON_ENABLED=true para ativar).');
+            }
         });
         
     } catch (error) {

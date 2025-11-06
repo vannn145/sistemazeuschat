@@ -10,6 +10,12 @@ class WhatsAppBusinessService {
         this.apiVersion = process.env.WHATSAPP_API_VERSION || 'v18.0';
         this.baseURL = `https://graph.facebook.com/${this.apiVersion}`;
         this.webhookVerifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+        this.statusMap = {
+            sent: Number(process.env.WHATSAPP_STATUS_SENT_ID || 1),
+            cancelled: Number(process.env.WHATSAPP_STATUS_CANCELLED_ID || 2),
+            confirmed: Number(process.env.WHATSAPP_STATUS_CONFIRMED_ID || 3),
+            delivered: Number(process.env.WHATSAPP_STATUS_DELIVERED_ID || 4)
+        };
         
         // Configurar axios com certificado se disponível
         this.setupHttpsAgent();
@@ -128,16 +134,18 @@ class WhatsAppBusinessService {
         }
     }
 
-    async sendTemplateMessage(to, templateName = 'hello_world', languageCode = 'en_US', components = []) {
+    async sendTemplateMessage(to, templateName, languageCode, components = []) {
         try {
             const cleanNumber = to.replace(/\D/g, '');
+            const tplName = templateName || process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
+            const lang = languageCode || process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
             const payload = {
                 messaging_product: 'whatsapp',
                 to: cleanNumber,
                 type: 'template',
                 template: {
-                    name: templateName,
-                    language: { code: languageCode },
+                    name: tplName,
+                    language: { code: lang },
                 }
             };
             if (components && components.length) {
@@ -156,7 +164,7 @@ class WhatsAppBusinessService {
                 }
             );
 
-            console.log(`✅ Template '${templateName}' enviado para ${cleanNumber}`);
+            console.log(`✅ Template '${tplName}' enviado para ${cleanNumber}`);
             return {
                 success: true,
                 messageId: response.data.messages?.[0]?.id,
@@ -225,16 +233,29 @@ class WhatsAppBusinessService {
     }
 
     // Webhook para receber respostas/confirmações
-    handleWebhook(body, signature) {
-        // Verificar assinatura do webhook
-        const crypto = require('crypto');
-        const expectedSignature = crypto
-            .createHmac('sha256', process.env.WHATSAPP_WEBHOOK_SECRET)
-            .update(JSON.stringify(body))
-            .digest('hex');
-
-        if (signature !== `sha256=${expectedSignature}`) {
-            throw new Error('Assinatura inválida');
+    handleWebhook(body, signature, rawBody) {
+        // Verificar assinatura do webhook (se segredo definido)
+        const secret = process.env.WHATSAPP_WEBHOOK_SECRET;
+        const hasRealSecret = secret && secret !== 'your_webhook_secret';
+        if (hasRealSecret) {
+            if (!signature) {
+                throw new Error('Webhook sem assinatura');
+            }
+            const crypto = require('crypto');
+            const payload = rawBody || JSON.stringify(body);
+            const expectedSignature = crypto
+                .createHmac('sha256', secret)
+                .update(payload)
+                .digest('hex');
+            if (signature !== `sha256=${expectedSignature}`) {
+                console.error('❌ Assinatura inválida do webhook', {
+                    received: signature,
+                    expected: `sha256=${expectedSignature}`
+                });
+                throw new Error('Assinatura inválida');
+            }
+        } else if (secret === 'your_webhook_secret') {
+            console.warn('⚠️  WHATSAPP_WEBHOOK_SECRET usa valor placeholder; pulando verificação da assinatura.');
         }
 
         // Processar mensagens recebidas
@@ -243,40 +264,138 @@ class WhatsAppBusinessService {
             const messages = changes.value?.messages || [];
             const statuses = changes.value?.statuses || [];
 
-            // Processar mensagens recebidas (confirmações)
-            messages.forEach(message => {
-                if (message.type === 'text') {
-                    const text = message.text.body.toLowerCase();
-                    const from = message.from;
+            console.log('📥 Webhook recebido:', {
+                messages: messages.map(m => ({ type: m.type, id: m.id, from: m.from, button: m.button?.text, interactive: m.interactive?.button_reply?.title || m.interactive?.list_reply?.title })),
+                statuses: statuses.map(s => ({ id: s.id, status: s.status }))
+            });
 
-                    // Verificar se é uma confirmação
-                    if (['sim', 's', 'confirmo', 'ok'].includes(text)) {
-                        console.log(`✅ Confirmação recebida de ${from}: ${text}`);
-                        // Aqui você pode atualizar o banco de dados
-                        this.processConfirmation(from, message.id);
-                    }
+            // Processar mensagens recebidas (confirmações via texto ou botão)
+            messages.forEach(message => {
+                const from = message.from; // número do usuário
+                let intent = null; // 'confirm' | 'cancel' | null
+
+                if (message.type === 'text') {
+                    const text = (message.text?.body || '').toLowerCase().trim();
+                    if (['sim', 's', 'confirmo', 'ok', 'confirmar'].includes(text)) intent = 'confirm';
+                    if (['nao', 'não', 'n', 'cancelar', 'desmarcar'].includes(text)) intent = 'cancel';
+                }
+
+                // Botões interativos (templates com quick replies)
+                if (message.type === 'button') {
+                    const title = (message.button?.text || '').toLowerCase();
+                    const payload = (message.button?.payload || '').toLowerCase();
+                    if (['sim', 'confirmar', 'confirmado', 'ok'].includes(title) || payload.includes('confirm')) intent = 'confirm';
+                    if (['desmarcar', 'cancelar', 'não', 'nao'].includes(title) || payload.includes('cancel')) intent = 'cancel';
+                }
+
+                // Interativo do tipo 'interactive' (button_reply/list_reply)
+                if (message.type === 'interactive') {
+                    const br = message.interactive?.button_reply;
+                    const lr = message.interactive?.list_reply;
+                    const title = (br?.title || lr?.title || '').toLowerCase();
+                    const id = (br?.id || lr?.id || '').toLowerCase();
+                    if (['sim', 'confirmar', 'confirmado', 'ok'].includes(title) || id.includes('confirm')) intent = 'confirm';
+                    if (['desmarcar', 'cancelar', 'não', 'nao'].includes(title) || id.includes('cancel')) intent = 'cancel';
+                }
+
+                if (intent === 'confirm') {
+                    console.log(`✅ Confirmação recebida de ${from}`);
+                    this.processConfirmation(from, message.id, message);
+                } else if (intent === 'cancel') {
+                    console.log(`⚠️  Pedido de desmarcação de ${from}`);
+                    this.processCancellation(from, message.id, message);
                 }
             });
 
             // Processar status de entrega
-            statuses.forEach(status => {
-                console.log(`📊 Status da mensagem ${status.id}: ${status.status}`);
+            statuses.forEach(async (status) => {
+                try {
+                    console.log(`📊 Status da mensagem ${status.id}: ${status.status}`);
+                    const dbService = require('./database');
+                    await dbService.updateMessageStatus(status.id, status.status, status.errors ? JSON.stringify(status.errors) : null);
+                } catch (e) {
+                    console.log('⚠️  Falha ao atualizar status da mensagem:', e.message);
+                }
             });
         }
 
         return { success: true };
     }
 
-    async processConfirmation(phoneNumber, messageId) {
-        // Implementar lógica para confirmar agendamento no banco
-        // Buscar agendamento pelo número de telefone e marcar como confirmado
+    async processConfirmation(phoneNumber, messageId, incomingMessage = null) {
         try {
             const dbService = require('./database');
-            // Lógica para encontrar e confirmar agendamento
-            console.log(`🔄 Processando confirmação de ${phoneNumber}`);
+            const apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            if (apt && apt.id) {
+                await dbService.confirmAppointment(apt.id);
+                if (apt.treatment_id) {
+                    try {
+                        await dbService.updateWhatsappStatusForTreatment(apt.treatment_id, this.statusMap.confirmed, {
+                            phone: phoneNumber,
+                            incomingMessageId: messageId,
+                            messageBody: this.extractIncomingText(incomingMessage)
+                        });
+                    } catch (statusError) {
+                        console.log('⚠️  Falha ao atualizar status WhatsApp:', statusError.message);
+                    }
+                } else {
+                    console.log('⚠️  Agendamento sem treatment_id para atualizar status WhatsApp:', apt.id);
+                }
+                const date = new Date(apt.tratamento_date);
+                const dateBR = date.toLocaleDateString('pt-BR');
+                const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 3199-3069.`;
+                await this.sendMessage(phoneNumber, thanks);
+                console.log(`🏁 Agendamento ${apt.id} confirmado por ${phoneNumber}`);
+            } else {
+                // Não encontrou – responde genérico
+                await this.sendMessage(phoneNumber, '✅ Obrigado! Sua confirmação foi recebida.');
+                console.log(`ℹ️ Confirmação sem match de agendamento para ${phoneNumber}`);
+            }
         } catch (error) {
-            console.error('Erro ao processar confirmação:', error);
+            console.error('Erro ao processar confirmação:', error.response?.data || error.message);
         }
+    }
+
+    async processCancellation(phoneNumber, messageId, incomingMessage = null) {
+        try {
+            const dbService = require('./database');
+            const apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            if (apt && apt.treatment_id) {
+                try {
+                    await dbService.updateWhatsappStatusForTreatment(apt.treatment_id, this.statusMap.cancelled, {
+                        phone: phoneNumber,
+                        incomingMessageId: messageId,
+                        messageBody: this.extractIncomingText(incomingMessage)
+                    });
+                } catch (statusError) {
+                    console.log('⚠️  Falha ao atualizar status WhatsApp (cancelamento):', statusError.message);
+                }
+            }
+            // Aqui poderíamos registrar um status de cancelamento ou alertar a equipe.
+            const msg = 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 3199-3069.';
+            await this.sendMessage(phoneNumber, msg);
+        } catch (error) {
+            console.error('Erro ao processar cancelamento:', error.response?.data || error.message);
+        }
+    }
+
+    extractIncomingText(message) {
+        if (!message) {
+            return null;
+        }
+        if (message.type === 'text') {
+            return message.text?.body || null;
+        }
+        if (message.type === 'button') {
+            return message.button?.text || message.button?.payload || null;
+        }
+        if (message.type === 'interactive') {
+            const button = message.interactive?.button_reply;
+            const list = message.interactive?.list_reply;
+            return button?.title || button?.id || list?.title || list?.id || null;
+        }
+        return null;
     }
 
     generateMessage(appointment) {

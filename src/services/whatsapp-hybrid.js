@@ -79,9 +79,9 @@ class WhatsAppHybridService {
     }
 
     // Para webhooks do Business API
-    handleWebhook(body, signature) {
+    handleWebhook(body, signature, rawBody) {
         if (this.mode === 'business') {
-            return this.activeService.handleWebhook(body, signature);
+            return this.activeService.handleWebhook(body, signature, rawBody);
         }
         throw new Error('Webhooks apenas disponíveis no modo Business API');
     }
