@@ -139,37 +139,7 @@ class WhatsAppBusinessService {
             const cleanNumber = to.replace(/\D/g, '');
             const tplName = templateName || process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
             const lang = languageCode || process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
-            // Se não vier componentes, força botões de confirmação/desmarcação
-            let templateComponents = components;
-            if (!components || !components.length) {
-                templateComponents = [
-                    {
-                        type: 'body',
-                        parameters: [
-                            { type: 'text', text: 'Paciente' },
-                            { type: 'text', text: 'Data' },
-                            { type: 'text', text: 'Hora' },
-                            { type: 'text', text: 'Procedimento' }
-                        ]
-                    },
-                    {
-                        type: 'button',
-                        sub_type: 'quick_reply',
-                        index: '0',
-                        parameters: [
-                            { type: 'payload', payload: 'confirm' }
-                        ]
-                    },
-                    {
-                        type: 'button',
-                        sub_type: 'quick_reply',
-                        index: '1',
-                        parameters: [
-                            { type: 'payload', payload: 'cancel' }
-                        ]
-                    }
-                ];
-            }
+            const templateComponents = this.buildTemplateComponents(components);
             const payload = {
                 messaging_product: 'whatsapp',
                 to: cleanNumber,
@@ -202,6 +172,59 @@ class WhatsAppBusinessService {
             console.error('❌ Erro ao enviar template:', error.response?.data || error.message);
             throw error;
         }
+    }
+
+    buildTemplateComponents(preset = []) {
+        const ensureTextParameters = (comp) => {
+            if (comp.type !== 'body') {
+                return comp;
+            }
+
+            const originalParams = Array.isArray(comp.parameters) ? comp.parameters : [];
+            const normalized = {
+                type: 'body',
+                parameters: []
+            };
+
+            const defaults = ['Paciente', 'Data', 'Hora', 'Procedimento'];
+
+            for (let i = 0; i < defaults.length; i++) {
+                const existing = originalParams[i];
+                if (existing && existing.type === 'text' && existing.text) {
+                    normalized.parameters.push(existing);
+                } else {
+                    normalized.parameters.push({ type: 'text', text: defaults[i] });
+                }
+            }
+
+            return normalized;
+        };
+
+        const hasBody = Array.isArray(preset) && preset.some(c => c?.type === 'body');
+
+        if (hasBody) {
+            return preset.map(comp => ensureTextParameters(comp));
+        }
+
+        return [
+            ensureTextParameters({ type: 'body', parameters: [] }),
+            {
+                type: 'button',
+                sub_type: 'quick_reply',
+                index: '0',
+                parameters: [
+                    { type: 'payload', payload: 'confirm' }
+                ]
+            },
+            {
+                type: 'button',
+                sub_type: 'quick_reply',
+                index: '1',
+                parameters: [
+                    { type: 'payload', payload: 'cancel' }
+                ]
+            }
+        ];
     }
 
     async sendBulkMessages(recipients) {
@@ -353,40 +376,39 @@ class WhatsAppBusinessService {
         try {
             const dbService = require('./database');
             const apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
-            if (apt && apt.id) {
-                // Tenta confirmar no banco
+            cd /root
+            tar czf disparador-antigo-$(date +%F).tgz disparador/            const confirmationText = this.extractIncomingText(incomingMessage);
+            const confirmationTimestamp = incomingMessage?.timestamp ? Number(incomingMessage.timestamp) : null;
+
+            const result = await dbService.registrarConfirmacao({
+                appointmentId: apt?.id,
+                phone: phoneNumber,
+                confirmedBy: 'paciente',
+                messageBody: confirmationText,
+                source: 'webhook',
+                incomingMessageId: messageId,
+                timestamp: confirmationTimestamp
+            });
+
+            let appointmentForMessage = apt;
+            if (!appointmentForMessage && result?.appointmentId) {
                 try {
-                    await dbService.confirmAppointment(apt.id);
-                    console.log(`✅ Banco atualizado: agendamento ${apt.id} confirmado.`);
-                } catch (dbError) {
-                    console.error(`❌ Erro ao confirmar agendamento no banco: ${dbError.message}`);
-                    await this.sendMessage(phoneNumber, '⚠️ Ocorreu um erro ao confirmar seu agendamento. Por favor, tente novamente ou entre em contato.');
-                    return;
+                    appointmentForMessage = await dbService.getAppointmentById(result.appointmentId);
+                } catch (lookupError) {
+                    console.log('⚠️  Falha ao recuperar agendamento confirmado para mensagem de agradecimento:', lookupError.message);
                 }
-                if (apt.treatment_id) {
-                    try {
-                        await dbService.updateWhatsappStatusForTreatment(apt.treatment_id, this.statusMap.confirmed, {
-                            phone: phoneNumber,
-                            incomingMessageId: messageId,
-                            messageBody: this.extractIncomingText(incomingMessage)
-                        });
-                        console.log(`✅ Status WhatsApp atualizado para tratamento ${apt.treatment_id}`);
-                    } catch (statusError) {
-                        console.log('⚠️  Falha ao atualizar status WhatsApp:', statusError.message);
-                    }
-                } else {
-                    console.log('⚠️  Agendamento sem treatment_id para atualizar status WhatsApp:', apt.id);
-                }
-                const date = new Date(apt.tratamento_date);
+            }
+
+            if (result?.appointmentId && appointmentForMessage) {
+                const date = new Date(appointmentForMessage.tratamento_date);
                 const dateBR = date.toLocaleDateString('pt-BR');
                 const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                 const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 3199-3069.`;
                 await this.sendMessage(phoneNumber, thanks);
-                console.log(`🏁 Agendamento ${apt.id} confirmado por ${phoneNumber}`);
+                console.log(`🏁 Agendamento ${result.appointmentId} confirmado via webhook por ${phoneNumber}`);
             } else {
-                // Não encontrou – responde genérico
                 await this.sendMessage(phoneNumber, '✅ Obrigado! Sua confirmação foi recebida.');
-                console.log(`ℹ️ Confirmação sem match de agendamento para ${phoneNumber}`);
+                console.log(`ℹ️ Confirmação via webhook sem match de agendamento para ${phoneNumber}`);
             }
         } catch (error) {
             console.error('❌ Erro geral ao processar confirmação:', error.response?.data || error.message);
@@ -402,7 +424,8 @@ class WhatsAppBusinessService {
                     await dbService.updateWhatsappStatusForTreatment(apt.treatment_id, this.statusMap.cancelled, {
                         phone: phoneNumber,
                         incomingMessageId: messageId,
-                        messageBody: this.extractIncomingText(incomingMessage)
+                        messageBody: this.extractIncomingText(incomingMessage),
+                        appointmentId: apt.id
                     });
                 } catch (statusError) {
                     console.log('⚠️  Falha ao atualizar status WhatsApp (cancelamento):', statusError.message);

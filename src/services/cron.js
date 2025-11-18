@@ -1,16 +1,3 @@
-/*
-  Serviço de Cron: monitora schedule_v e dispara templates automaticamente.
-
-  Configurações por .env:
-  - CRON_ENABLED=true|false
-  - CRON_INTERVAL_MS=60000            // frequência da varredura
-  - CRON_LOOKBACK_DAYS=1              // dias no passado para cobrir inserções atrasadas
-  - CRON_LOOKAHEAD_DAYS=14            // dias no futuro para agendar confirmações
-  - CRON_BATCH_SIZE=30                // máximo por ciclo
-  - DEFAULT_CONFIRM_TEMPLATE_NAME=confirmacao_personalizada
-  - DEFAULT_CONFIRM_TEMPLATE_LOCALE=pt_BR
-*/
-
 const db = require('./database');
 const waba = require('./whatsapp-business');
 

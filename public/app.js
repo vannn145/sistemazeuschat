@@ -1,3 +1,49 @@
+// Função para enviar log ao backend
+async function sendPatientLog(log) {
+    try {
+        await fetch('/api/messages/logs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(log)
+        });
+    } catch (e) {
+        console.error('Erro ao enviar log:', e);
+    }
+}
+
+// Exemplo: enviar log ao disparar mensagem
+// Chame sendPatientLog({ appointmentId, phone, messageId, type, templateName, status }) após disparo
+
+async function renderPatientLogs() {
+    const container = document.getElementById('logs-container');
+    container.innerHTML = '<small class="text-muted">Carregando...</small>';
+    try {
+        // Corrige o prefixo da API para funcionar em produção e dev
+        const res = await fetch(window.location.origin + '/api/messages/logs');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.data)) {
+            if (data.data.length === 0) {
+                container.innerHTML = '<small class="text-muted">Nenhum log encontrado.</small>';
+                return;
+            }
+            container.innerHTML = `<ul class="list-group">
+                ${data.data.map(log => `<li class="list-group-item">
+                    <strong>${log.phone}</strong> <span class="badge bg-info">${log.type}</span><br>
+                    <span class="text-muted">${log.message}</span><br>
+                    <small>${new Date(log.created_at).toLocaleString('pt-BR')}</small>
+                </li>`).join('')}
+            </ul>`;
+        } else {
+            container.innerHTML = '<small class="text-danger">Erro ao carregar logs.</small>';
+        }
+    } catch (e) {
+        container.innerHTML = '<small class="text-danger">Erro ao carregar logs.</small>';
+    }
+}
+
+// Atualiza logs a cada 15 segundos
+setInterval(renderPatientLogs, 15000);
+document.addEventListener('DOMContentLoaded', renderPatientLogs);
 // Estado da aplicação
 let whatsappConnected = false;
 let selectedAppointments = new Set();
@@ -40,8 +86,6 @@ document.getElementById('send-test-btn').addEventListener('click', sendTestMessa
 
 // Inicialização
 document.addEventListener('DOMContentLoaded', function() {
-    loadData();
-    checkWhatsAppStatus();
     // Filtro de data (default: amanhã)
     const filterDateInput = document.getElementById('filter-date');
     const applyFilterBtn = document.getElementById('apply-filter-btn');
@@ -53,8 +97,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const dd = String(tomorrow.getDate()).padStart(2, '0');
         if (!filterDateInput.value) {
             filterDateInput.value = `${yyyy}-${mm}-${dd}`;
-            currentFilterDate = filterDateInput.value;
         }
+        currentFilterDate = filterDateInput.value || '';
         if (applyFilterBtn) {
             applyFilterBtn.addEventListener('click', () => {
                 currentFilterDate = filterDateInput.value || '';
@@ -62,12 +106,17 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     }
-    
+
+    loadData();
+    checkWhatsAppStatus();
     // Verificar status a cada 5 segundos
     setInterval(checkWhatsAppStatus, 5000);
 
     // Atualizar status das mensagens a cada 10 segundos
     setInterval(loadStatuses, 10000);
+
+    // Atualiza confirmações recentes a cada 10 segundos para visão quase em tempo real
+    setInterval(renderRecentConfirmations, 10000);
 
     // Bind On-Prem elements (rendered in DOM now)
     onpremRequestBtn = document.getElementById('onprem-request-btn');
@@ -271,6 +320,7 @@ async function loadStats() {
         
         statsContainer.innerHTML = `
             <div class="small">
+                <div class="text-muted mb-1">Janela: últimos 30 dias</div>
                 <div><strong>Total:</strong> ${stats.total}</div>
                 <div><strong>Confirmados:</strong> ${stats.confirmed}</div>
                 <div class="text-warning"><strong>Pendentes:</strong> ${stats.pending}</div>
@@ -601,7 +651,9 @@ function renderStatusBadge(status) {
         sent: { cls: 'bg-info text-dark', label: 'enviada' },
         delivered: { cls: 'bg-primary', label: 'entregue' },
         read: { cls: 'bg-success', label: 'lida' },
-        failed: { cls: 'bg-danger', label: 'falhou' }
+        failed: { cls: 'bg-danger', label: 'falhou' },
+        confirmed: { cls: 'bg-success', label: 'confirmada' },
+        cancelled: { cls: 'bg-warning text-dark', label: 'cancelada' }
     };
     const cfg = map[status] || { cls: 'bg-secondary', label: status };
     return `<span class="badge ${cfg.cls}">${cfg.label}</span>`;
@@ -614,3 +666,33 @@ function updateStatusBadges() {
         el.innerHTML = renderStatusBadge(status);
     });
 }
+
+// Novas funções para confirmações recentes
+async function renderRecentConfirmations() {
+    const container = document.getElementById('confirmations-container');
+    container.innerHTML = '<small class="text-muted">Carregando...</small>';
+    try {
+        const res = await fetch('/api/messages/confirmations/recent');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.data)) {
+            if (data.data.length === 0) {
+                container.innerHTML = '<small class="text-muted">Nenhuma confirmação recente.</small>';
+                return;
+            }
+            container.innerHTML = `<ul class="list-group">
+                ${data.data.map(c => `<li class="list-group-item">
+                    <strong>${c.phone}</strong> confirmado por <span class="text-primary">${c.confirmed_by || c.confirmedBy || 'sistema'}</span><br>
+                    <small>${new Date(c.confirmed_at || c.confirmedAt).toLocaleString('pt-BR')}</small>
+                    ${c.message_body ? `<br><small class="text-muted">"${c.message_body}"</small>` : ''}
+                </li>`).join('')}
+            </ul>`;
+        } else {
+            container.innerHTML = '<small class="text-danger">Erro ao carregar confirmações.</small>';
+        }
+    } catch (e) {
+        container.innerHTML = '<small class="text-danger">Erro ao carregar confirmações.</small>';
+    }
+}
+
+// Chame ao carregar o painel
+renderRecentConfirmations();

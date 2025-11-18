@@ -1,3 +1,6 @@
+// Endpoint temporário para testar getAppointmentStats
+// ...existing code...
+// Endpoint temporário para testar getAppointmentStats
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -16,6 +19,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 // Middleware
 app.use(cors());
 app.use(express.json({
+    limit: process.env.BODY_LIMIT || '2mb',
     verify: (req, res, buf) => {
         // Guardar corpo bruto para verificar assinatura do webhook
         req.rawBody = buf.toString();
@@ -25,6 +29,15 @@ app.use(express.static('public'));
 
 // Routes
 app.use('/api/messages', messageRoutes);
+// Expor rota de confirmações recentes diretamente em /api/confirmations/recent
+app.get('/api/confirmations/recent', (req, res) => {
+    // Acessa o array do router
+    if (messageRoutes.confirmationsLog) {
+        res.json({ success: true, data: messageRoutes.confirmationsLog.slice(-20) });
+    } else {
+        res.json({ success: true, data: [] });
+    }
+});
 
 // Rota principal
 app.get('/', (req, res) => {
@@ -43,6 +56,10 @@ app.get('/health', (req, res) => {
 
 // Inicialização do servidor
 async function startServer() {
+    // Teste direto dos métodos do dbService
+    console.log('Testando métodos dbService...');
+    console.log('getUnconfirmedAppointments:', typeof dbService.getUnconfirmedAppointments);
+    console.log('getAppointmentStats:', typeof dbService.getAppointmentStats);
     try {
         console.log('🚀 Iniciando Sistema de Disparo WhatsApp...');
         // Log rápido de configuração ativa para evitar confusão de ambiente

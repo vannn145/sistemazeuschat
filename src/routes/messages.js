@@ -1,19 +1,87 @@
+
 const express = require('express');
 const router = express.Router();
-// Confirma agendamento pelo telefone (usado pelo cron/script)
-router.get('/confirm/:phone', async (req, res) => {
+const fs = require('fs');
+const LOG_FILE = 'logs/patient_logs.json';
+
+// Endpoint para estatísticas de agendamentos
+router.get('/appointments/stats', async (req, res) => {
     try {
-        const phone = req.params.phone;
-        if (!phone) return res.status(400).json({ success: false, message: 'Telefone não informado' });
-        // Chama o método de confirmação do WhatsAppBusiness
-        await whatsappBusiness.processConfirmation(phone, null, null);
-        res.json({ success: true, message: `Confirmação processada para ${phone}` });
+        const stats = await dbService.getAppointmentStats();
+        res.json({ success: true, data: stats });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-const cronService = require('../services/cron');
+
+// Função para gravar log no arquivo
+function appendLogToFile(log) {
+    let logs = [];
+    try {
+        if (fs.existsSync(LOG_FILE)) {
+            logs = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8'));
+        }
+    } catch (e) {}
+    logs.unshift({ ...log, created_at: new Date().toISOString() });
+    if (logs.length > 100) logs = logs.slice(0, 100);
+    fs.writeFileSync(LOG_FILE, JSON.stringify(logs, null, 2));
+}
+
+// Endpoint para gravar log (simulação de disparo)
+router.post('/logs', (req, res) => {
+    try {
+        const log = req.body;
+        appendLogToFile(log);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Endpoint para listar logs dos pacientes (do arquivo)
+router.get('/logs', (req, res) => {
+    try {
+        let logs = [];
+        if (fs.existsSync(LOG_FILE)) {
+            logs = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8'));
+        }
+        res.json({ success: true, data: logs });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 const dbService = require('../services/database');
+
+// ...existing code...
+// Confirma agendamento pelo telefone (usado pelo cron/script)
+// Removido: confirmationsLog não é mais usado, confirmações vêm do banco
+
+router.post('/confirm/:phone', async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        const confirmedBy = req.body.confirmedBy || 'cron';
+        const appointmentId = req.body.appointmentId || null;
+        if (!phone) return res.status(400).json({ success: false, message: 'Telefone não informado' });
+        await whatsappBusiness.processConfirmation(phone, null, null);
+        await dbService.registrarConfirmacao({ appointmentId, phone, confirmedBy });
+        res.json({ success: true, message: `Confirmação processada para ${phone}`, confirmedBy });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Endpoint para listar confirmações recentes
+router.get('/confirmations/recent', async (req, res) => {
+    try {
+        const data = await dbService.buscarConfirmacoesRecentes(20);
+        res.json({ success: true, data });
+    } catch (error) {
+        res.json({ success: false, data: [], message: error.message });
+    }
+});
+
+const cronService = require('../services/cron');
 const whatsappService = require('../services/whatsapp-hybrid');
 const whatsappBusiness = require('../services/whatsapp-business');
 const axios = require('axios');
@@ -319,6 +387,7 @@ router.get('/appointments/pending', async (req, res) => {
         const appointments = await dbService.getUnconfirmedAppointments(date);
         res.json({ success: true, data: appointments });
     } catch (error) {
+        console.error('[routes] /appointments/pending error:', error);
         res.status(500).json({ 
             success: false, 
             message: error.message 

@@ -1,32 +1,4 @@
-﻿    // ...existing code...
-const { Pool } = require('pg');
-
-const DEMO_APPOINTMENTS = [
-    {
-        id: 1,
-        patient_name: 'Joao Silva',
-        tratamento_date: new Date('2024-12-15T10:00:00-03:00'),
-        patient_contacts: '5511999999999',
-        main_procedure_term: 'Exame de Sangue',
-        confirmed: false
-    },
-    {
-        id: 2,
-        patient_name: 'Maria Santos',
-        tratamento_date: new Date('2024-12-15T14:30:00-03:00'),
-        patient_contacts: '5511888888888',
-        main_procedure_term: 'Ultrassom',
-        confirmed: true
-    },
-    {
-        id: 3,
-        patient_name: 'Pedro Costa',
-        tratamento_date: new Date('2024-12-16T09:15:00-03:00'),
-        patient_contacts: '5511777777777',
-        main_procedure_term: 'Consulta Cardiologia',
-        confirmed: false
-    }
-];
+﻿const { Pool } = require('pg');
 
 class DatabaseService {
     constructor() {
@@ -36,535 +8,780 @@ class DatabaseService {
             user: process.env.DB_USER,
             password: process.env.DB_PASSWORD,
             database: process.env.DB_NAME,
-            ssl: false,
+            ssl: process.env.DB_SSL === 'true',
             connectionTimeoutMillis: 10000,
             idleTimeoutMillis: 30000,
             max: Number(process.env.DB_MAX_POOL || 10)
         });
+
+        console.log('[DatabaseService] Pool config:', {
+            host: process.env.DB_HOST,
+            port: process.env.DB_PORT,
+            user: process.env.DB_USER,
+            database: process.env.DB_NAME,
+            ssl: process.env.DB_SSL
+        });
+
         this.schema = process.env.DB_SCHEMA || 'public';
         this.demoMode = false;
         this.isConnected = false;
         this.initPromise = null;
-        console.log('[DB] Instanciado DatabaseService');
-    }
-
-    getDemoAppointments() {
-        return DEMO_APPOINTMENTS.map(item => ({ ...item }));
-    }
-
-    scheduleEpochExpression() {
-        return 'COALESCE(sm.when, s.when)';
-    }
-
-    buildScheduleSelect() {
-        return `
-            COALESCE(sm.schedule_id, s.schedule_id) AS id,
-            COALESCE(sm.schedule_id, s.schedule_id) AS schedule_id,
-            COALESCE(sm.when, s.when) AS schedule_date_epoch,
-            COALESCE(sm.when_end, s.when_end) AS schedule_date_end_epoch,
-            TO_TIMESTAMP(COALESCE(sm.when, s.when)) AS schedule_date,
-            CASE WHEN COALESCE(sm.when_end, s.when_end) IS NOT NULL THEN TO_TIMESTAMP(COALESCE(sm.when_end, s.when_end)) END AS schedule_date_end,
-            TO_TIMESTAMP(COALESCE(sm.when, s.when)) AS tratamento_date,
-            COALESCE(sm.confirmed, s.confirmed) AS confirmed,
-            COALESCE(p.full_name, sm.patient_name) AS patient_name,
-            COALESCE(sm.patient_name, p.full_name) AS patient_name_raw,
-            COALESCE(sm.patient_id, s.patient_id) AS patient_id,
-            COALESCE(phone_pref.value, sm.patient_contacts, sm.patient_phones) AS patient_contacts,
-            COALESCE(sm.patient_phones, sm.patient_contacts, phone_pref.value) AS patient_phones,
-            phone_pref.value AS preferred_phone,
-            p.pemail AS patient_email,
-            p.pcpf AS patient_cpf,
-            p.birthdate AS patient_birthdate,
-            COALESCE(sm.main_procedure_term, sm.treatment_character_term, sm.treatment_model, sm.main_procedure_code::text, s.procedure_code::text) AS main_procedure_term,
-            COALESCE(sm.main_procedure_code, s.procedure_code) AS main_procedure_code,
-            COALESCE(sm.schedule_group_id, s.schedule_group_id) AS schedule_group_id,
-            COALESCE(sm.schedule_group_name, sg.schedule_group_name) AS schedule_group_name,
-            COALESCE(sm.schedule_group_color, sg.schedule_group_color) AS schedule_group_color,
-            COALESCE(sm.treatment_id, t.treatment_id) AS treatment_id,
-            COALESCE(sm.treatment_status_id, t.treatment_status_id) AS treatment_status_id,
-            sm.observation,
-            COALESCE(sm.hf_id, s.health_facility_id) AS health_facility_id,
-            COALESCE(hf.name, sm.hf_name) AS health_facility_name,
-            COALESCE(sm.rhp_id, s.health_professional_id) AS health_professional_id,
-            COALESCE(hp_person.full_name, sm.rhp_name) AS health_professional_name,
-            COALESCE(sm.hic_id, s.health_insurance_company_id) AS insurance_id,
-            COALESCE(hic.name, sm.hic_name) AS insurance_name,
-            COALESCE(sm.hicp_id, s.health_insurance_company_plan_id) AS insurance_plan_id,
-            COALESCE(hicp.plan_name, sm.hicp_name) AS insurance_plan_name,
-            COALESCE(sm.created_at, s.created_at) AS created_at,
-            s.updated_at
-        `;
-    }
-
-    buildScheduleBaseJoins() {
-        const schema = this.schema;
-        return `
-            FROM ${schema}.schedule s
-            FULL OUTER JOIN ${schema}.schedule_mv sm ON sm.schedule_id = s.schedule_id
-            LEFT JOIN ${schema}.treatment t ON t.schedule_id = COALESCE(sm.schedule_id, s.schedule_id)
-            LEFT JOIN ${schema}.schedule_group sg ON sg.schedule_group_id = COALESCE(sm.schedule_group_id, s.schedule_group_id)
-            LEFT JOIN ${schema}.patient pt ON pt.patient_id = COALESCE(sm.patient_id, s.patient_id)
-            LEFT JOIN ${schema}.person p ON p.person_id = pt.person_id
-                        LEFT JOIN LATERAL (
-                                SELECT c.value
-                                FROM ${schema}.contact c
-                                WHERE c.person_id = p.person_id
-                                    AND (c.is_whatsapp IS NULL OR c.is_whatsapp = TRUE)
-                                ORDER BY c.contact_id DESC
-                                LIMIT 1
-                        ) AS phone_pref ON TRUE
-            LEFT JOIN ${schema}.health_facility hf ON hf.health_facility_id = COALESCE(sm.hf_id, s.health_facility_id)
-            LEFT JOIN ${schema}.health_insurance_company hic ON hic.health_insurance_company_id = COALESCE(sm.hic_id, s.health_insurance_company_id)
-            LEFT JOIN ${schema}.health_insurance_company_plan hicp ON hicp.health_insurance_company_plan_id = COALESCE(sm.hicp_id, s.health_insurance_company_plan_id)
-            LEFT JOIN ${schema}.health_professional hp ON hp.health_professional_id = COALESCE(sm.rhp_id, s.health_professional_id)
-            LEFT JOIN ${schema}.person hp_person ON hp_person.person_id = hp.person_id
-        `;
-    }
-
-    buildScheduleQuery({ additionalWhere = [], extraJoins = '', orderBy = 'schedule_date ASC, schedule_id ASC', limit } = {}) {
-        const whereClauses = [];
-        if (additionalWhere.length > 0) {
-            whereClauses.push(...additionalWhere);
-        }
-        const where = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
-        const order = orderBy ? `ORDER BY ${orderBy}` : '';
-        const limitClause = limit ? `LIMIT ${Number(limit)}` : '';
-        return `
-            SELECT
-                ${this.buildScheduleSelect()}
-            ${this.buildScheduleBaseJoins()}
-            ${extraJoins}
-            ${where}
-            ${order}
-            ${limitClause}
-        `;
     }
 
     async ensureInitialized() {
-        if (this.demoMode) {
-            throw new Error('[DB] Banco em modo demonstração');
+        if (this.initPromise) {
+            await this.initPromise;
+            return;
         }
+
         if (this.isConnected) {
             return;
         }
-        if (this.initPromise) {
-            return this.initPromise;
-        }
+
         this.initPromise = (async () => {
             try {
-                const client = await this.pool.connect();
-                try {
-                    await client.query(`SET search_path TO ${this.schema}, public`);
-                } finally {
-                    client.release();
-                }
-                await this.initMessageLogs();
+                await this.pool.query('SELECT 1');
                 this.isConnected = true;
-                console.log('[DB] Conexão com bancos estabelecida com sucesso!');
-            } catch (error) {
+            } catch (err) {
                 this.isConnected = false;
-                this.demoMode = true;
-                console.log('[DB] Falha ao conectar no banco:', error.message);
-                console.log('[DB] Verifique rede, firewall, credenciais, IP e porta.');
-                throw new Error(`[DB] Erro na conexão com banco: ${error.message}`);
+                console.error('[DatabaseService] Erro ao conectar pool:', err);
+                throw err;
             } finally {
                 this.initPromise = null;
             }
         })();
-        return this.initPromise;
+
+        await this.initPromise;
+    }
+
+    sanitizePhone(phone) {
+        if (!phone) {
+            return null;
+        }
+
+        const digits = String(phone).match(/\d+/g);
+        return digits ? digits.join('') : null;
+    }
+
+    formatE164(phone) {
+        const digits = this.sanitizePhone(phone);
+        if (!digits) {
+            return null;
+        }
+
+        let normalized = digits;
+        if (!normalized.startsWith('55') && normalized.length >= 10) {
+            normalized = `55${normalized}`;
+        }
+
+        if (!normalized.startsWith('55')) {
+            return `+${normalized}`;
+        }
+
+        return `+${normalized}`;
+    }
+
+    phoneDigitsForWhatsapp(phone) {
+        const digits = this.sanitizePhone(phone);
+        if (!digits) {
+            return null;
+        }
+
+        if (digits.startsWith('55')) {
+            return digits;
+        }
+
+        return digits.length >= 10 ? `55${digits}` : digits;
+    }
+
+    getEpochSeconds() {
+        return Math.floor(Date.now() / 1000);
+    }
+
+    mapAppointmentRow(row) {
+        if (!row) {
+            return null;
+        }
+
+        const mapped = { ...row };
+        mapped.id = Number(row.id ?? row.schedule_id);
+
+        if (!mapped.tratamento_date && typeof row.when === 'number') {
+            mapped.tratamento_date = new Date(row.when * 1000);
+        }
+
+        return mapped;
+    }
+
+    async updateLatestLogStatus(appointmentId, status, executor = null) {
+        if (!appointmentId || !status) {
+            return;
+        }
+
+        const runner = executor || this.pool;
+        const query = `
+            WITH last_log AS (
+                SELECT id
+                FROM ${this.schema}.message_logs
+                WHERE appointment_id = $1
+                ORDER BY updated_at DESC NULLS LAST, created_at DESC
+                LIMIT 1
+            )
+            UPDATE ${this.schema}.message_logs ml
+            SET status = $2,
+                updated_at = NOW()
+            WHERE ml.id IN (SELECT id FROM last_log)
+        `;
+
+        await runner.query(query, [String(appointmentId), status]);
     }
 
     async initMessageLogs() {
-        const table = `${this.schema}.message_logs`;
-        const query = `
-            CREATE TABLE IF NOT EXISTS ${table} (
+        await this.ensureInitialized();
+
+        const tableQuery = `
+            CREATE TABLE IF NOT EXISTS ${this.schema}.message_logs (
                 id SERIAL PRIMARY KEY,
-                appointment_id BIGINT,
+                appointment_id TEXT,
                 phone TEXT,
-                message_id TEXT,
+                message_id TEXT UNIQUE,
                 type TEXT,
                 template_name TEXT,
                 status TEXT,
                 error_details TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS idx_message_logs_appointment ON ${table} (appointment_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_message_logs_message_id_unique ON ${table} (message_id);
-            CREATE INDEX IF NOT EXISTS idx_message_logs_created_at ON ${table} (created_at DESC);
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
         `;
-        await this.pool.query(query);
+
+        await this.pool.query(tableQuery);
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_appointment ON ${this.schema}.message_logs (appointment_id)`);
+        await this.pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_message_logs_message_id_unique ON ${this.schema}.message_logs (message_id)`);
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_created_at ON ${this.schema}.message_logs (created_at DESC)`);
     }
 
-    async testConnection() {
+    async logOutboundMessage({ appointmentId, phone, messageId, type, templateName, status, errorDetails = null }) {
+        if (!messageId) {
+            return;
+        }
+
         await this.ensureInitialized();
-        return true;
-    }
+        await this.initMessageLogs();
 
-    filterDemoByDate(data, filterDate) {
-        if (!filterDate) {
-            return data;
-        }
-        const start = new Date(`${filterDate}T00:00:00-03:00`);
-        const end = new Date(start.getTime());
-        end.setDate(end.getDate() + 1);
-        return data.filter(item => item.tratamento_date >= start && item.tratamento_date < end);
-    }
-
-    async getUnconfirmedAppointments(filterDate) {
-        if (this.demoMode) {
-            const data = this.getDemoAppointments().filter(item => !item.confirmed);
-            return this.filterDemoByDate(data, filterDate);
-        }
-        await this.ensureInitialized();
-        const params = [];
-        const where = ['COALESCE(sm.confirmed, s.confirmed) IS NOT TRUE', 'COALESCE(s.active, TRUE) = TRUE'];
-        const dateExpr = this.scheduleEpochExpression();
-        if (filterDate) {
-            const start = new Date(`${filterDate}T00:00:00-03:00`);
-            const end = new Date(start.getTime());
-            end.setDate(end.getDate() + 1);
-            const startEpoch = Math.floor(start.getTime() / 1000);
-            const endEpoch = Math.floor(end.getTime() / 1000);
-            const startIdx = params.length + 1;
-            const endIdx = params.length + 2;
-            params.push(startEpoch, endEpoch);
-            where.push(`${dateExpr} >= $${startIdx}`);
-            where.push(`${dateExpr} < $${endIdx}`);
-        } else {
-            where.push(`${dateExpr} >= EXTRACT(EPOCH FROM NOW())`);
-        }
-        const query = this.buildScheduleQuery({ additionalWhere: where, orderBy: 'schedule_date ASC, schedule_id ASC' });
-        const result = await this.pool.query(query, params);
-        return result.rows;
-    }
-
-    async getAllAppointments(filterDate) {
-        if (this.demoMode) {
-            const data = this.getDemoAppointments();
-            return this.filterDemoByDate(data, filterDate);
-        }
-        await this.ensureInitialized();
-        const params = [];
-        const where = [];
-        const dateExpr = this.scheduleEpochExpression();
-        if (filterDate) {
-            const start = new Date(`${filterDate}T00:00:00-03:00`);
-            const end = new Date(start.getTime());
-            end.setDate(end.getDate() + 1);
-            const startEpoch = Math.floor(start.getTime() / 1000);
-            const endEpoch = Math.floor(end.getTime() / 1000);
-            const startIdx = params.length + 1;
-            const endIdx = params.length + 2;
-            params.push(startEpoch, endEpoch);
-            where.push(`${dateExpr} >= $${startIdx}`);
-            where.push(`${dateExpr} < $${endIdx}`);
-        } else {
-            where.push(`${dateExpr} >= EXTRACT(EPOCH FROM NOW())`);
-        }
-        const query = this.buildScheduleQuery({ additionalWhere: where });
-        const result = await this.pool.query(query, params);
-        return result.rows;
-    }
-
-    /**
-     * Confirma o agendamento pelo ID. Atualiza status no banco e retorna o registro atualizado.
-     */
-    async confirmAppointment(appointmentId) {
-        if (!appointmentId) {
-            throw new Error('[DB] Parâmetro appointmentId obrigatório');
-        }
-        if (this.demoMode) {
-            console.log(`[DEMO] Agendamento ${appointmentId} confirmado`);
-            return { id: Number(appointmentId), confirmed: true };
-        }
-        await this.ensureInitialized();
-        console.log(`[DB] confirmAppointment: tentando confirmar agendamento ID=${appointmentId}`);
-        let updated = 0;
-        const updateScheduleSql = `
-            UPDATE ${this.schema}.schedule
-            SET confirmed = TRUE,
-                updated_at = EXTRACT(EPOCH FROM NOW())::bigint
-            WHERE schedule_id = $1
-            RETURNING schedule_id
-        `;
-        try {
-            const scheduleResult = await this.pool.query(updateScheduleSql, [appointmentId]);
-            updated = scheduleResult.rowCount;
-            console.log(`[DB] confirmAppointment: atualizado na tabela schedule, linhas=${updated}`);
-        } catch (error) {
-            console.log('[DB] Falha ao atualizar schedule, tentando schedule_mv:', error.message);
-        }
-        if (!updated) {
-            try {
-                const updateViewSql = `
-                    UPDATE ${this.schema}.schedule_mv
-                    SET confirmed = TRUE
-                    WHERE schedule_id = $1
-                    RETURNING schedule_id
-                `;
-                const viewResult = await this.pool.query(updateViewSql, [appointmentId]);
-                updated = viewResult.rowCount;
-                console.log(`[DB] confirmAppointment: atualizado na tabela schedule_mv, linhas=${updated}`);
-            } catch (error) {
-                console.log('[DB] Falha ao atualizar schedule_mv:', error.message);
-            }
-        }
-        if (!updated) {
-            console.log(`[DB] confirmAppointment: nenhum agendamento encontrado para confirmar (ID=${appointmentId})`);
-            throw new Error('[DB] Agendamento não encontrado para confirmar');
-        }
-        console.log(`[DB] confirmAppointment: agendamento confirmado (ID=${appointmentId})`);
-        // Retorna o status atualizado do agendamento
-        return await this.getAppointmentById(appointmentId);
-    }
-
-        /**
-         * Busca agendamento pelo ID. Retorna null se não encontrado.
-         */
-        async getAppointmentById(appointmentId) {
-            if (!appointmentId) return null;
-            if (this.demoMode) {
-                const demo = this.getDemoAppointments();
-                return demo.find(item => String(item.id) === String(appointmentId)) || null;
-            }
-            await this.ensureInitialized();
-            const query = this.buildScheduleQuery({
-                additionalWhere: ['COALESCE(sm.schedule_id, s.schedule_id) = $1'],
-                limit: 1
-            });
-            try {
-                const result = await this.pool.query(query, [appointmentId]);
-                return result.rows[0] || null;
-            } catch (error) {
-                console.log('[DB] Erro ao buscar agendamento por ID:', error.message);
-                return null;
-            }
-        }
-
-    async getAppointmentStats() {
-        if (this.demoMode) {
-            const data = this.getDemoAppointments();
-            const total = data.length;
-            const confirmed = data.filter(item => item.confirmed).length;
-            const pending = total - confirmed;
-            return { total, confirmed, pending };
-        }
-        await this.ensureInitialized();
-        const dateExpr = this.scheduleEpochExpression();
-        const query = `
-            SELECT
-                COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE COALESCE(sm.confirmed, s.confirmed) = TRUE)::int AS confirmed,
-                COUNT(*) FILTER (WHERE COALESCE(sm.confirmed, s.confirmed) IS NOT TRUE)::int AS pending
-            FROM ${this.schema}.schedule s
-            LEFT JOIN ${this.schema}.schedule_mv sm ON sm.schedule_id = s.schedule_id
-            WHERE COALESCE(s.active, TRUE) = TRUE
-              AND ${dateExpr} >= EXTRACT(EPOCH FROM NOW())
-        `;
-        const result = await this.pool.query(query);
-        return result.rows[0];
-    }
-
-    async getAppointmentByPatientName(patientName) {
-        if (!patientName) {
-            return null;
-        }
-        if (this.demoMode) {
-            const name = String(patientName).toLowerCase();
-            const demo = this.getDemoAppointments();
-            const exact = demo.find(item => item.patient_name.toLowerCase() === name);
-            if (exact) {
-                return exact;
-            }
-            return demo.find(item => item.patient_name.toLowerCase().includes(name)) || null;
-        }
-        await this.ensureInitialized();
-        const dateExpr = this.scheduleEpochExpression();
-        const clauses = [
-            {
-                where: ['UPPER(COALESCE(p.full_name, sm.patient_name)) = UPPER($1)', 'COALESCE(s.active, TRUE) = TRUE', `${dateExpr} >= EXTRACT(EPOCH FROM NOW())`],
-                order: 'schedule_date ASC, schedule_id ASC'
-            },
-            {
-                where: ['UPPER(COALESCE(p.full_name, sm.patient_name)) = UPPER($1)'],
-                order: 'schedule_date DESC, schedule_id DESC'
-            },
-            {
-                where: [`COALESCE(p.full_name, sm.patient_name) ILIKE '%' || $1 || '%'`],
-                order: 'schedule_date DESC, schedule_id DESC'
-            }
-        ];
-        for (const clause of clauses) {
-            const query = this.buildScheduleQuery({
-                additionalWhere: clause.where,
-                orderBy: clause.order,
-                limit: 1
-            });
-            const result = await this.pool.query(query, [patientName]);
-            if (result.rows[0]) {
-                return result.rows[0];
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Busca o último agendamento pendente pelo telefone.
-     */
-    async getLatestPendingAppointmentByPhone(phone) {
-        if (!phone) {
-            console.log('[DB] getLatestPendingAppointmentByPhone: telefone vazio');
-            return null;
-        }
-        await this.ensureInitialized();
-        const onlyDigits = String(phone || '').replace(/\D/g, '');
-        console.log(`[DB] getLatestPendingAppointmentByPhone: telefone recebido='${phone}', apenas dígitos='${onlyDigits}'`);
-        if (!onlyDigits) {
-            console.log('[DB] getLatestPendingAppointmentByPhone: telefone sem dígitos válidos');
-            return null;
-        }
-        const query = `
-            SELECT sv.schedule_id AS id, sv.patient_name, to_timestamp(sv."when") AS tratamento_date,
-                   sv.patient_contacts, sv.main_procedure_term, sv.confirmed
-            FROM schedule_v sv
-            WHERE sv.confirmed = false
-              AND regexp_replace(sv.patient_contacts, '\\D', '', 'g') LIKE '%' || $1 || '%'
-            ORDER BY sv."when" ASC
-            LIMIT 1
-        `;
-        try {
-            const result = await this.pool.query(query, [onlyDigits]);
-            console.log(`[DB] getLatestPendingAppointmentByPhone: resultado da busca:`, result.rows[0]);
-            return result.rows[0] || null;
-        } catch (error) {
-            console.log('[DB] Erro ao buscar agendamento por telefone:', error.message);
-            return null;
-        }
-    }
-
-    async getPendingInWindowNoTemplate(lookbackDays = 1, lookaheadDays = 14, limit = 50) {
-        if (this.demoMode) {
-            const demo = this.getDemoAppointments().filter(item => !item.confirmed);
-            return demo.slice(0, Number(limit) || 1);
-        }
-        await this.ensureInitialized();
+        const normalizedPhone = this.formatE164(phone) || phone || null;
         const now = new Date();
-        const start = new Date(now.getTime() - Number(lookbackDays) * 24 * 60 * 60 * 1000);
-        const end = new Date(now.getTime() + Number(lookaheadDays) * 24 * 60 * 60 * 1000);
-        const startEpoch = Math.floor(start.getTime() / 1000);
-        const endEpoch = Math.floor(end.getTime() / 1000);
-        const dateExpr = this.scheduleEpochExpression();
-        const extraJoins = `
-            LEFT JOIN ${this.schema}.message_logs ml ON ml.appointment_id = COALESCE(sm.schedule_id, s.schedule_id)
-                                                   AND ml.type = 'template'
-                                                   AND COALESCE(ml.status, '') NOT IN ('failed')
-        `;
-        const where = [
-            'COALESCE(sm.confirmed, s.confirmed) IS NOT TRUE',
-            'COALESCE(s.active, TRUE) = TRUE',
-            `${dateExpr} >= $1`,
-            `${dateExpr} < $2`,
-            'ml.id IS NULL'
-        ];
-        const query = this.buildScheduleQuery({
-            additionalWhere: where,
-            extraJoins,
-            orderBy: 'schedule_date ASC, schedule_id ASC',
-            limit: Math.max(1, Number(limit))
-        });
-        const result = await this.pool.query(query, [startEpoch, endEpoch]);
-        return result.rows;
-    }
 
-    async logOutboundMessage({ appointmentId, phone, messageId, type, templateName, status, errorDetails }) {
-        if (this.demoMode) {
-            console.log('[DEMO] logOutboundMessage', { appointmentId, phone, messageId, type, templateName, status });
-            return { id: Date.now(), appointment_id: appointmentId, message_id: messageId, status: status || 'sent' };
-        }
-        await this.ensureInitialized();
         const query = `
-            INSERT INTO ${this.schema}.message_logs (appointment_id, phone, message_id, type, template_name, status, error_details)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (message_id) DO UPDATE SET
-                appointment_id = COALESCE(EXCLUDED.appointment_id, ${this.schema}.message_logs.appointment_id),
-                phone = COALESCE(EXCLUDED.phone, ${this.schema}.message_logs.phone),
-                type = COALESCE(EXCLUDED.type, ${this.schema}.message_logs.type),
-                template_name = COALESCE(EXCLUDED.template_name, ${this.schema}.message_logs.template_name),
-                status = COALESCE(EXCLUDED.status, ${this.schema}.message_logs.status),
-                error_details = COALESCE(EXCLUDED.error_details, ${this.schema}.message_logs.error_details),
-                updated_at = NOW()
-            RETURNING *
+            INSERT INTO ${this.schema}.message_logs
+                (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+            VALUES
+                ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            ON CONFLICT (message_id) DO UPDATE
+                SET appointment_id = EXCLUDED.appointment_id,
+                    phone = EXCLUDED.phone,
+                    type = EXCLUDED.type,
+                    template_name = EXCLUDED.template_name,
+                    status = EXCLUDED.status,
+                    error_details = EXCLUDED.error_details,
+                    updated_at = EXCLUDED.updated_at
         `;
-        const values = [
-            appointmentId ?? null,
-            phone ?? null,
-            messageId ?? null,
-            type ?? null,
-            templateName ?? null,
-            status ?? null,
-            errorDetails ?? null
+
+        const params = [
+            appointmentId ? String(appointmentId) : null,
+            normalizedPhone,
+            messageId,
+            type || null,
+            templateName || null,
+            status || null,
+            errorDetails || null,
+            now
         ];
-        const result = await this.pool.query(query, values);
-        return result.rows[0];
+
+        await this.pool.query(query, params);
     }
 
     async updateMessageStatus(messageId, status, errorDetails = null) {
-        if (!messageId || this.demoMode) {
+        if (!messageId) {
             return;
         }
+
         await this.ensureInitialized();
-        const query = `
+        await this.initMessageLogs();
+
+        const now = new Date();
+
+        const updateQuery = `
             UPDATE ${this.schema}.message_logs
             SET status = $2,
                 error_details = $3,
-                updated_at = NOW()
+                updated_at = $4
             WHERE message_id = $1
         `;
-        await this.pool.query(query, [messageId, status, errorDetails]);
+
+        const result = await this.pool.query(updateQuery, [messageId, status || null, errorDetails || null, now]);
+
+        if (result.rowCount === 0) {
+            const insertQuery = `
+                INSERT INTO ${this.schema}.message_logs
+                    (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+                VALUES
+                    (NULL, NULL, $1, 'status', NULL, $2, $3, $4, $4)
+            `;
+
+            await this.pool.query(insertQuery, [messageId, status || null, errorDetails || null, now]);
+        }
     }
 
-    async getLatestStatusesForAppointments(appointmentIds) {
+    async getLatestStatusesForAppointments(appointmentIds = []) {
+        await this.ensureInitialized();
+
         if (!Array.isArray(appointmentIds) || appointmentIds.length === 0) {
             return {};
         }
-        if (this.demoMode) {
-            return {};
-        }
-        await this.ensureInitialized();
-        const params = appointmentIds.map(id => Number(id));
-        const placeholders = params.map((_, idx) => `$${idx + 1}`).join(', ');
+
+        const ids = appointmentIds.map(id => String(id));
+
         const query = `
             SELECT DISTINCT ON (appointment_id)
                 appointment_id,
                 status,
                 message_id,
-                template_name,
-                phone,
-                type,
-                created_at,
-                updated_at
+                updated_at,
+                created_at
             FROM ${this.schema}.message_logs
-            WHERE appointment_id IN (${placeholders})
-            ORDER BY appointment_id, created_at DESC, id DESC
+            WHERE appointment_id = ANY($1)
+            ORDER BY appointment_id, COALESCE(updated_at, created_at) DESC NULLS LAST
         `;
-        const result = await this.pool.query(query, params);
+
+        const { rows } = await this.pool.query(query, [ids]);
         const map = {};
-        for (const row of result.rows) {
-            map[row.appointment_id] = row;
+
+        for (const row of rows) {
+            const key = Number(row.appointment_id);
+            map[key] = {
+                status: row.status,
+                message_id: row.message_id,
+                updated_at: row.updated_at || row.created_at || null
+            };
         }
+
         return map;
     }
 
-    /**
-     * Remove caracteres não numéricos do telefone.
-     */
-    sanitizePhone(phone) {
-        if (!phone) {
+    async getUnconfirmedAppointments(date = null) {
+        await this.ensureInitialized();
+
+        let query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            WHERE sv.confirmed = false
+        `;
+
+        const params = [];
+
+        if (date) {
+            query += ' AND to_timestamp(sv."when")::date = $1';
+            params.push(date);
+        }
+
+        query += ' ORDER BY sv."when" ASC';
+
+        const { rows } = await this.pool.query(query, params);
+        return rows.map(row => this.mapAppointmentRow(row));
+    }
+
+    async getAllAppointments(date = null) {
+        await this.ensureInitialized();
+
+        let query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+        `;
+
+        const params = [];
+
+        if (date) {
+            query += ' WHERE to_timestamp(sv."when")::date = $1';
+            params.push(date);
+        }
+
+        query += ' ORDER BY sv."when" ASC';
+
+        const { rows } = await this.pool.query(query, params);
+        return rows.map(row => this.mapAppointmentRow(row));
+    }
+
+    async getPendingInWindowNoTemplate(lookbackDays = 1, lookaheadDays = 14, limit = 30) {
+        await this.ensureInitialized();
+
+        const query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            LEFT JOIN ${this.schema}.message_logs ml
+                ON ml.appointment_id::bigint = sv.schedule_id
+               AND ml.type = 'template'
+               AND ml.status IN ('sent', 'delivered', 'read')
+            WHERE sv.confirmed = false
+              AND to_timestamp(sv."when") BETWEEN (NOW() - ($1::int * INTERVAL '1 day')) AND (NOW() + ($2::int * INTERVAL '1 day'))
+              AND ml.id IS NULL
+            ORDER BY sv."when" ASC
+            LIMIT $3
+        `;
+
+        const params = [lookbackDays, lookaheadDays, limit];
+        const { rows } = await this.pool.query(query, params);
+        return rows.map(row => this.mapAppointmentRow(row));
+    }
+
+    async getAppointmentById(id) {
+        await this.ensureInitialized();
+
+        const query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            WHERE sv.schedule_id = $1
+            LIMIT 1
+        `;
+
+        const { rows } = await this.pool.query(query, [id]);
+        return this.mapAppointmentRow(rows[0] || null);
+    }
+
+    async getAppointmentByPatientName(patientName) {
+        await this.ensureInitialized();
+
+        const query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            WHERE sv.patient_name ILIKE $1
+            ORDER BY sv."when" DESC
+            LIMIT 1
+        `;
+
+        const { rows } = await this.pool.query(query, [`%${patientName}%`]);
+        return this.mapAppointmentRow(rows[0] || null);
+    }
+
+    async getLatestPendingAppointmentByPhone(phone) {
+        await this.ensureInitialized();
+
+        const digits = this.sanitizePhone(phone);
+        if (!digits) {
             return null;
         }
-        const digits = String(phone).replace(/\D/g, '');
-        return digits || null;
+
+        const variations = new Set();
+        variations.add(digits);
+
+        if (digits.startsWith('55')) {
+            variations.add(digits.slice(2));
+        } else {
+            variations.add(`55${digits}`);
+        }
+
+        if (digits.length > 11) {
+            variations.add(digits.slice(-11));
+        }
+
+        if (digits.length > 10) {
+            variations.add(digits.slice(-10));
+        }
+
+        const variationsArray = Array.from(variations).filter(Boolean);
+
+        if (variationsArray.length === 0) {
+            return null;
+        }
+
+        const clauses = variationsArray
+            .map((_, index) => `REGEXP_REPLACE(sv.patient_contacts, '\\D', '', 'g') LIKE '%' || $${index + 1} || '%'`)
+            .join(' OR ');
+
+        const query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            WHERE sv.confirmed = false
+              AND (${clauses})
+            ORDER BY sv."when" ASC
+            LIMIT 1
+        `;
+
+        const { rows } = await this.pool.query(query, variationsArray);
+        return this.mapAppointmentRow(rows[0] || null);
+    }
+
+    async confirmAppointment(scheduleId) {
+        await this.ensureInitialized();
+
+        if (!scheduleId) {
+            throw new Error('scheduleId é obrigatório para confirmar agendamento');
+        }
+
+        const nowEpoch = this.getEpochSeconds();
+
+        const updateSchedule = `
+            UPDATE ${this.schema}.schedule
+            SET confirmed = true,
+                updated_at = $2
+            WHERE schedule_id = $1
+        `;
+
+        await this.pool.query(updateSchedule, [scheduleId, nowEpoch]);
+
+        const updateScheduleMv = `
+            UPDATE ${this.schema}.schedule_mv
+            SET confirmed = true,
+                updated_at = $2
+            WHERE schedule_id = $1
+        `;
+
+        try {
+            await this.pool.query(updateScheduleMv, [scheduleId, nowEpoch]);
+        } catch (_) {
+            // Ignora: algumas bases podem não ter schedule_mv com coluna confirmed
+        }
+
+        return { scheduleId, confirmed: true };
+    }
+
+    async registrarConfirmacao({
+        appointmentId,
+        phone,
+        confirmedBy = 'system',
+        messageBody = null,
+        source = 'manual',
+        incomingMessageId = null,
+        timestamp = null
+    }) {
+        await this.ensureInitialized();
+
+        let target = null;
+
+        if (appointmentId) {
+            target = await this.getAppointmentById(appointmentId);
+        } else if (phone) {
+            target = await this.getLatestPendingAppointmentByPhone(phone);
+            appointmentId = target?.id;
+        }
+
+        if (appointmentId) {
+            await this.confirmAppointment(appointmentId);
+        }
+
+        const normalizedPhone = this.formatE164(phone) || phone || null;
+        const now = new Date();
+
+        await this.initMessageLogs();
+        await this.pool.query(
+            `INSERT INTO ${this.schema}.message_logs (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+             VALUES ($1, $2, $3, 'confirmation', $4, 'confirmed', $5, $6, $6)`,
+            [
+                appointmentId ? String(appointmentId) : null,
+                normalizedPhone,
+                incomingMessageId || null,
+                confirmedBy || null,
+                messageBody || null,
+                now
+            ]
+        );
+
+        if (appointmentId && !target?.treatment_id) {
+            await this.updateLatestLogStatus(appointmentId, 'confirmed');
+        }
+
+        if (target?.treatment_id) {
+            await this.updateWhatsappStatusForTreatment(target.treatment_id, 3, {
+                phone: phone,
+                messageBody: messageBody || `Confirmado por ${confirmedBy}`,
+                direction: source === 'webhook' ? 'webhook_confirm' : 'manual_confirm',
+                appointmentId,
+                incomingMessageId,
+                timestamp
+            });
+        }
+
+        return {
+            appointmentId: appointmentId || null,
+            treatmentId: target?.treatment_id || null,
+            confirmedBy,
+            source
+        };
+    }
+
+    async updateWhatsappStatusForTreatment(treatmentId, statusId, metadata = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        if (!treatmentId) {
+            return null;
+        }
+
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const phoneDigits = this.phoneDigitsForWhatsapp(metadata.phone) || null;
+            const messageTime = metadata.timestamp ? Number(metadata.timestamp) : this.getEpochSeconds();
+            const directionHint = metadata.direction || (metadata.messageBody ? 'incoming' : null);
+            const descriptionSuffix = directionHint ? `_${directionHint}` : '';
+            let baseDescription = 'status_update';
+
+            if (statusId === 3) {
+                baseDescription = 'confirmed';
+            } else if (statusId === 2) {
+                baseDescription = 'cancelled';
+            } else if (statusId === 4) {
+                baseDescription = 'delivered';
+            } else if (statusId === 1) {
+                baseDescription = 'sent';
+            }
+
+            const description = `${baseDescription}${descriptionSuffix}`;
+
+            let appointmentId = metadata.appointmentId || null;
+            if (!appointmentId) {
+                const { rows: treatmentRows } = await client.query(
+                    `SELECT schedule_id FROM ${this.schema}.treatment WHERE treatment_id = $1 LIMIT 1`,
+                    [treatmentId]
+                );
+                appointmentId = treatmentRows[0]?.schedule_id || null;
+            }
+
+            const insertMessageQuery = `
+                INSERT INTO ${this.schema}.whatsapp_message (
+                    whatsapp_status_id,
+                    whatsapp_message_phone,
+                    whatsapp_message_body,
+                    whatsapp_message_quoted_message_id,
+                    whatsapp_message_chat_id,
+                    whatsapp_message_description,
+                    whatsapp_message_time,
+                    whatsapp_message_created_at,
+                    whatsapp_message_updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $7)
+                RETURNING whatsapp_message_id
+            `;
+
+            const messageBody = metadata.messageBody || null;
+            const messageId = metadata.incomingMessageId || null;
+
+            const { rows } = await client.query(insertMessageQuery, [
+                statusId,
+                phoneDigits,
+                messageBody,
+                messageId,
+                messageId,
+                description,
+                messageTime
+            ]);
+
+            const whatsappMessageId = rows[0]?.whatsapp_message_id;
+
+            if (whatsappMessageId) {
+                const insertRelationQuery = `
+                    INSERT INTO ${this.schema}.whatsapp_message_has_treatment (
+                        whatsapp_message_id,
+                        treatment_id,
+                        wmht_is_delivery,
+                        wmht_created_at,
+                        telemedicine
+                    ) VALUES ($1, $2, false, $3, false)
+                    ON CONFLICT DO NOTHING
+                `;
+
+                await client.query(insertRelationQuery, [
+                    whatsappMessageId,
+                    treatmentId,
+                    messageTime
+                ]);
+            }
+
+            const shouldUpdateLog = ['confirmed', 'cancelled', 'delivered', 'sent'].includes(baseDescription);
+            if (appointmentId && shouldUpdateLog) {
+                await this.updateLatestLogStatus(appointmentId, baseDescription, client);
+            }
+
+            await client.query('COMMIT');
+
+            return { whatsappMessageId: whatsappMessageId || null, appointmentId: appointmentId || null };
+        } catch (err) {
+            await client.query('ROLLBACK');
+            console.error('Erro ao atualizar status do WhatsApp:', err.message);
+            throw err;
+        } finally {
+            client.release();
+        }
+    }
+
+    async buscarConfirmacoesRecentes(limit = 20) {
+        await this.ensureInitialized();
+
+        const query = `
+            SELECT
+                wm.whatsapp_message_id,
+                wm.whatsapp_message_body,
+                wm.whatsapp_message_phone,
+                wm.whatsapp_message_time,
+                wm.whatsapp_message_description,
+                sv.schedule_id AS appointment_id,
+                sv.patient_name,
+                sv.patient_contacts,
+                sv.main_procedure_term
+            FROM ${this.schema}.whatsapp_message wm
+            JOIN ${this.schema}.whatsapp_message_has_treatment wmht
+              ON wmht.whatsapp_message_id = wm.whatsapp_message_id
+            JOIN ${this.schema}.schedule_v sv
+              ON sv.treatment_id = wmht.treatment_id
+            WHERE wm.whatsapp_status_id = 3
+            ORDER BY wm.whatsapp_message_time DESC
+            LIMIT $1
+        `;
+
+        const { rows } = await this.pool.query(query, [limit]);
+
+        return rows.map(row => ({
+            appointment_id: row.appointment_id,
+            phone: row.patient_contacts || row.whatsapp_message_phone,
+            confirmed_by: row.patient_name || null,
+            confirmed_at: row.whatsapp_message_time ? new Date(row.whatsapp_message_time * 1000) : null,
+            main_procedure_term: row.main_procedure_term,
+            message_body: row.whatsapp_message_body,
+            description: row.whatsapp_message_description
+        }));
+    }
+
+    async getAllMessageLogs(limit = 100) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const outboundQuery = `
+            SELECT ml.*, sv.patient_name, sv.patient_contacts, sv.main_procedure_term
+            FROM ${this.schema}.message_logs ml
+            LEFT JOIN ${this.schema}.schedule_v sv ON sv.schedule_id = ml.appointment_id::bigint
+            ORDER BY ml.created_at DESC
+            LIMIT $1
+        `;
+
+        const inboundQuery = `
+            SELECT
+                wm.whatsapp_message_id,
+                wm.whatsapp_message_body,
+                wm.whatsapp_message_phone,
+                wm.whatsapp_message_description,
+                wm.whatsapp_message_time,
+                sv.schedule_id AS appointment_id,
+                sv.patient_name,
+                sv.patient_contacts,
+                sv.main_procedure_term
+            FROM ${this.schema}.whatsapp_message wm
+            JOIN ${this.schema}.whatsapp_message_has_treatment wmht ON wmht.whatsapp_message_id = wm.whatsapp_message_id
+            JOIN ${this.schema}.schedule_v sv ON sv.treatment_id = wmht.treatment_id
+            WHERE wm.whatsapp_status_id IN (2, 3, 4)
+            ORDER BY wm.whatsapp_message_time DESC
+            LIMIT $1
+        `;
+
+        const [outbound, inbound] = await Promise.all([
+            this.pool.query(outboundQuery, [limit]),
+            this.pool.query(inboundQuery, [limit])
+        ]);
+
+        const outboundLogs = outbound.rows.map(row => ({
+            id: row.id,
+            appointment_id: row.appointment_id ? Number(row.appointment_id) : null,
+            phone: row.phone,
+            type: row.type,
+            template_name: row.template_name,
+            status: row.status,
+            message: row.status ? `${row.status}${row.template_name ? ` (${row.template_name})` : ''}` : row.template_name,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            patient_name: row.patient_name,
+            main_procedure_term: row.main_procedure_term
+        }));
+
+        const inboundLogs = inbound.rows.map(row => ({
+            id: `wmsg-${row.whatsapp_message_id}`,
+            appointment_id: row.appointment_id,
+            phone: row.patient_contacts || (row.whatsapp_message_phone ? `+${row.whatsapp_message_phone}` : null),
+            type: row.whatsapp_message_description,
+            template_name: null,
+            status: 'received',
+            message: row.whatsapp_message_body,
+            created_at: row.whatsapp_message_time ? new Date(row.whatsapp_message_time * 1000) : null,
+            updated_at: null,
+            patient_name: row.patient_name,
+            main_procedure_term: row.main_procedure_term
+        }));
+
+        const combined = [...outboundLogs, ...inboundLogs];
+        combined.sort((a, b) => {
+            const dateA = new Date(a.created_at || 0).getTime();
+            const dateB = new Date(b.created_at || 0).getTime();
+            return dateB - dateA;
+        });
+
+        return combined.slice(0, limit);
+    }
+
+    async getAppointmentStats() {
+        await this.ensureInitialized();
+
+        const statsQuery = `
+            SELECT
+                COUNT(*) FILTER (WHERE confirmed = true) AS confirmed,
+                COUNT(*) FILTER (WHERE confirmed = false) AS pending,
+                COUNT(*) AS total
+            FROM ${this.schema}.schedule_v
+            WHERE to_timestamp("when") >= NOW() - INTERVAL '30 days'
+        `;
+
+        const row = (await this.pool.query(statsQuery)).rows[0];
+
+        return {
+            total: Number(row.total || 0),
+            confirmed: Number(row.confirmed || 0),
+            pending: Number(row.pending || 0)
+        };
+    }
+
+    async getAppointmentsMap(params = [], query = '') {
+        await this.ensureInitialized();
+
+        let sql = query;
+        if (!sql) {
+            sql = `
+                SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+                FROM ${this.schema}.schedule_v sv
+            `;
+        }
+
+        const { rows } = await this.pool.query(sql, params);
+        const map = {};
+
+        for (const row of rows) {
+            const mapped = this.mapAppointmentRow(row);
+            if (mapped?.id) {
+                map[mapped.id] = mapped;
+            }
+        }
+
+        return map;
+    }
+
+    async getAllMessageLogsRaw(limit = 100) {
+        return this.getAllMessageLogs(limit);
+    }
+
+    async testConnection() {
+        try {
+            await this.pool.query('SELECT 1');
+            this.demoMode = false;
+            return true;
+        } catch (err) {
+            this.demoMode = true;
+            throw err;
+        }
     }
 }
 

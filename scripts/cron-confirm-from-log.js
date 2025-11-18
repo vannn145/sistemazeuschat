@@ -4,7 +4,7 @@ const axios = require('axios');
 const path = require('path');
 
 // Caminho do log (ajuste para o nome do seu log)
-const logPath = '/var/www/disparador/logs/out-0.log'; // Arquivo de log real na VPS
+const logPath = 'logs/cron-confirm-log.txt'; // Arquivo de log para testes locais
 
 // Endpoint de confirmação (ajuste para o seu backend)
 const API_URL = 'http://localhost:3000/api/confirm/'; // exemplo: /api/confirm/:phone
