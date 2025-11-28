@@ -1,6 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { formatClinicDateTime } = require('../utils/datetime');
 
 class WhatsAppBusinessService {
     constructor() {
@@ -134,12 +135,12 @@ class WhatsAppBusinessService {
         }
     }
 
-    async sendTemplateMessage(to, templateName, languageCode, components = []) {
+    async sendTemplateMessage(to, templateName, languageCode, components = [], options = {}) {
         try {
             const cleanNumber = to.replace(/\D/g, '');
             const tplName = templateName || process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
             const lang = languageCode || process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
-            const templateComponents = this.buildTemplateComponents(components);
+            const templateComponents = this.buildTemplateComponents(components, options);
             const payload = {
                 messaging_product: 'whatsapp',
                 to: cleanNumber,
@@ -174,57 +175,102 @@ class WhatsAppBusinessService {
         }
     }
 
-    buildTemplateComponents(preset = []) {
+    buildTemplateComponents(preset = [], options = {}) {
+        const scheduleTokenRaw = options?.scheduleId !== undefined && options?.scheduleId !== null
+            ? String(options.scheduleId).trim()
+            : '';
+        const scheduleToken = scheduleTokenRaw.replace(/[^A-Za-z0-9_-]/g, '');
+        const confirmPayload = scheduleToken ? `confirm_${scheduleToken}` : 'confirm';
+        const cancelPayload = scheduleToken ? `cancel_${scheduleToken}` : 'cancel';
+        const includeConfirmButtons = options?.includeConfirmButtons ?? Boolean(scheduleToken);
+
+        const sanitizeText = (value, fallback) => {
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                return trimmed.length ? trimmed.slice(0, 1024) : fallback;
+            }
+            if (value === null || value === undefined) {
+                return fallback;
+            }
+            const text = String(value).trim();
+            return text.length ? text.slice(0, 1024) : fallback;
+        };
+
         const ensureTextParameters = (comp) => {
             if (comp.type !== 'body') {
                 return comp;
             }
 
             const originalParams = Array.isArray(comp.parameters) ? comp.parameters : [];
-            const normalized = {
+            const defaults = ['Paciente', 'Data', 'Horário', 'Procedimento não informado'];
+
+            return {
                 type: 'body',
-                parameters: []
+                parameters: defaults.map((fallback, index) => {
+                    const candidate = originalParams[index];
+                    const safeText = sanitizeText(candidate?.text, fallback);
+                    return { type: 'text', text: safeText };
+                })
             };
-
-            const defaults = ['Paciente', 'Data', 'Hora', 'Procedimento'];
-
-            for (let i = 0; i < defaults.length; i++) {
-                const existing = originalParams[i];
-                if (existing && existing.type === 'text' && existing.text) {
-                    normalized.parameters.push(existing);
-                } else {
-                    normalized.parameters.push({ type: 'text', text: defaults[i] });
-                }
-            }
-
-            return normalized;
         };
 
-        const hasBody = Array.isArray(preset) && preset.some(c => c?.type === 'body');
+        const sanitizePayload = (value, fallback, preferFallback = false) => {
+            const base = typeof value === 'string' ? value.trim() : '';
+            const source = base || (preferFallback ? fallback || '' : '') || fallback || '';
+            const sanitized = source ? source.replace(/[^A-Za-z0-9_:\-]/g, '_') : '';
+            if (sanitized) {
+                return sanitized.slice(0, 128);
+            }
+            return preferFallback ? 'confirm' : 'option_0';
+        };
 
-        if (hasBody) {
-            return preset.map(comp => ensureTextParameters(comp));
+        const createButton = (index, payload) => ({
+            type: 'button',
+            sub_type: 'quick_reply',
+            index: String(index),
+            parameters: [
+                { type: 'payload', payload }
+            ]
+        });
+
+        let normalized = Array.isArray(preset)
+            ? preset.map(comp => {
+                if (!comp || typeof comp !== 'object') {
+                    return null;
+                }
+                if (comp.type === 'body') {
+                    return ensureTextParameters(comp);
+                }
+                if (comp.type === 'button' && comp.sub_type === 'quick_reply') {
+                    const idx = comp.index !== undefined ? String(comp.index) : '0';
+                    const fallbackPayload = idx === '0' ? confirmPayload : idx === '1' ? cancelPayload : undefined;
+                    const existingPayload = Array.isArray(comp.parameters)
+                        ? comp.parameters.find(p => p && p.type === 'payload')?.payload
+                        : undefined;
+                    return createButton(idx, sanitizePayload(existingPayload, fallbackPayload, includeConfirmButtons));
+                }
+                return comp;
+            }).filter(Boolean)
+            : [];
+
+        const hasBody = normalized.some(c => c?.type === 'body');
+        if (!hasBody) {
+            normalized.unshift(ensureTextParameters({ type: 'body', parameters: [] }));
         }
 
-        return [
-            ensureTextParameters({ type: 'body', parameters: [] }),
-            {
-                type: 'button',
-                sub_type: 'quick_reply',
-                index: '0',
-                parameters: [
-                    { type: 'payload', payload: 'confirm' }
-                ]
-            },
-            {
-                type: 'button',
-                sub_type: 'quick_reply',
-                index: '1',
-                parameters: [
-                    { type: 'payload', payload: 'cancel' }
-                ]
+        if (includeConfirmButtons) {
+            const hasConfirmButton = normalized.some(c => c?.type === 'button' && c.sub_type === 'quick_reply' && c.index === '0');
+            if (!hasConfirmButton) {
+                normalized.push(createButton('0', confirmPayload));
             }
-        ];
+
+            const hasCancelButton = normalized.some(c => c?.type === 'button' && c.sub_type === 'quick_reply' && c.index === '1');
+            if (!hasCancelButton) {
+                normalized.push(createButton('1', cancelPayload));
+            }
+        }
+
+        return normalized;
     }
 
     async sendBulkMessages(recipients) {
@@ -375,13 +421,25 @@ class WhatsAppBusinessService {
     async processConfirmation(phoneNumber, messageId, incomingMessage = null) {
         try {
             const dbService = require('./database');
-            const apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
-            cd /root
-            tar czf disparador-antigo-$(date +%F).tgz disparador/            const confirmationText = this.extractIncomingText(incomingMessage);
+            const hintedAppointmentId = this.extractAppointmentId(incomingMessage);
+            let appointmentFromHint = null;
+            if (hintedAppointmentId) {
+                try {
+                    appointmentFromHint = await dbService.getAppointmentById(hintedAppointmentId);
+                    if (!appointmentFromHint) {
+                        console.log(`ℹ️  Schedule hint ${hintedAppointmentId} informado no webhook mas não encontrado no banco.`);
+                    }
+                } catch (hintErr) {
+                    console.log(`⚠️  Falha ao buscar agendamento ${hintedAppointmentId} do webhook:`, hintErr.message);
+                }
+            }
+
+            const apt = appointmentFromHint || await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            const confirmationText = this.extractIncomingText(incomingMessage);
             const confirmationTimestamp = incomingMessage?.timestamp ? Number(incomingMessage.timestamp) : null;
 
             const result = await dbService.registrarConfirmacao({
-                appointmentId: apt?.id,
+                appointmentId: appointmentFromHint?.id || hintedAppointmentId || apt?.id,
                 phone: phoneNumber,
                 confirmedBy: 'paciente',
                 messageBody: confirmationText,
@@ -390,7 +448,7 @@ class WhatsAppBusinessService {
                 timestamp: confirmationTimestamp
             });
 
-            let appointmentForMessage = apt;
+            let appointmentForMessage = appointmentFromHint || apt;
             if (!appointmentForMessage && result?.appointmentId) {
                 try {
                     appointmentForMessage = await dbService.getAppointmentById(result.appointmentId);
@@ -400,9 +458,7 @@ class WhatsAppBusinessService {
             }
 
             if (result?.appointmentId && appointmentForMessage) {
-                const date = new Date(appointmentForMessage.tratamento_date);
-                const dateBR = date.toLocaleDateString('pt-BR');
-                const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const { date: dateBR, time: timeBR } = formatClinicDateTime(appointmentForMessage.tratamento_date);
                 const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 3199-3069.`;
                 await this.sendMessage(phoneNumber, thanks);
                 console.log(`🏁 Agendamento ${result.appointmentId} confirmado via webhook por ${phoneNumber}`);
@@ -418,21 +474,53 @@ class WhatsAppBusinessService {
     async processCancellation(phoneNumber, messageId, incomingMessage = null) {
         try {
             const dbService = require('./database');
-            const apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
-            if (apt && apt.treatment_id) {
+            const hintedAppointmentId = this.extractAppointmentId(incomingMessage);
+            let appointmentFromHint = null;
+            if (hintedAppointmentId) {
                 try {
-                    await dbService.updateWhatsappStatusForTreatment(apt.treatment_id, this.statusMap.cancelled, {
+                    appointmentFromHint = await dbService.getAppointmentById(hintedAppointmentId);
+                } catch (hintErr) {
+                    console.log(`⚠️  Falha ao buscar agendamento ${hintedAppointmentId} do webhook:`, hintErr.message);
+                }
+            }
+
+            const apt = appointmentFromHint || await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            const cancellationText = this.extractIncomingText(incomingMessage);
+            const cancellationTimestamp = incomingMessage?.timestamp ? Number(incomingMessage.timestamp) : null;
+
+            const targetAppointmentId = appointmentFromHint?.id || hintedAppointmentId || apt?.id;
+
+            if (targetAppointmentId) {
+                await dbService.cancelAppointment(targetAppointmentId, {
+                    phone: phoneNumber,
+                    incomingMessageId: messageId,
+                    messageBody: cancellationText,
+                    cancelledBy: 'paciente',
+                    source: 'webhook',
+                    timestamp: cancellationTimestamp
+                });
+            }
+
+            const treatmentOwner = appointmentFromHint || apt;
+
+            if (treatmentOwner && treatmentOwner.treatment_id) {
+                try {
+                    await dbService.updateWhatsappStatusForTreatment(treatmentOwner.treatment_id, this.statusMap.cancelled, {
                         phone: phoneNumber,
                         incomingMessageId: messageId,
-                        messageBody: this.extractIncomingText(incomingMessage),
-                        appointmentId: apt.id
+                        messageBody: cancellationText,
+                        appointmentId: targetAppointmentId || treatmentOwner.id,
+                        direction: 'webhook_cancel',
+                        timestamp: cancellationTimestamp
                     });
                 } catch (statusError) {
                     console.log('⚠️  Falha ao atualizar status WhatsApp (cancelamento):', statusError.message);
                 }
             }
             // Aqui poderíamos registrar um status de cancelamento ou alertar a equipe.
-            const msg = 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 3199-3069.';
+            const msg = (appointmentFromHint || apt)
+                ? 'Recebemos seu pedido e removemos seu agendamento. Para reagendar, fale com nossa equipe no (34) 3199-3069.'
+                : 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 3199-3069.';
             await this.sendMessage(phoneNumber, msg);
         } catch (error) {
             console.error('Erro ao processar cancelamento:', error.response?.data || error.message);
@@ -457,10 +545,38 @@ class WhatsAppBusinessService {
         return null;
     }
 
+    extractAppointmentId(message) {
+        if (!message) {
+            return null;
+        }
+
+        const rawValues = [];
+        if (message.button?.payload) rawValues.push(message.button.payload);
+        if (message.button?.text) rawValues.push(message.button.text);
+        if (message.text?.body) rawValues.push(message.text.body);
+
+        const interactive = message.interactive;
+        if (interactive?.button_reply?.id) rawValues.push(interactive.button_reply.id);
+        if (interactive?.button_reply?.title) rawValues.push(interactive.button_reply.title);
+        if (interactive?.list_reply?.id) rawValues.push(interactive.list_reply.id);
+        if (interactive?.list_reply?.title) rawValues.push(interactive.list_reply.title);
+
+        for (const value of rawValues) {
+            if (!value || typeof value !== 'string') continue;
+            const match = value.match(/(?:schedule|apt|id|confirm|cancel|conf|cnl)[_:\-]?(\d{3,})/i);
+            if (match && match[1]) {
+                const parsed = Number(match[1]);
+                if (Number.isFinite(parsed)) {
+                    return parsed;
+                }
+            }
+        }
+
+        return null;
+    }
+
     generateMessage(appointment) {
-        const date = new Date(appointment.tratamento_date);
-        const formattedDate = date.toLocaleDateString('pt-BR');
-        const formattedTime = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const { date: formattedDate, time: formattedTime } = formatClinicDateTime(appointment.tratamento_date);
 
         return `🏥 *Confirmação de Agendamento*
 
