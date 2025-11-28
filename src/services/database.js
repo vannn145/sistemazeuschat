@@ -200,6 +200,35 @@ class DatabaseService {
         await this.pool.query(query, params);
     }
 
+    async hasTemplateLogsBetween(startDate, endDate, templateName = null) {
+        if (!startDate || !endDate) {
+            return false;
+        }
+
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const conditions = [`type = 'template'`, 'created_at >= $1', 'created_at < $2'];
+        const params = [startDate, endDate];
+
+        if (templateName) {
+            conditions.push('template_name = $3');
+            params.push(templateName);
+        }
+
+        const query = `
+            SELECT EXISTS (
+                SELECT 1
+                FROM ${this.schema}.message_logs
+                WHERE ${conditions.join(' AND ')}
+                LIMIT 1
+            ) AS present
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+        return Boolean(rows[0]?.present);
+    }
+
     async updateMessageStatus(messageId, status, errorDetails = null) {
         if (!messageId) {
             return;
@@ -246,6 +275,9 @@ class DatabaseService {
                 appointment_id,
                 status,
                 message_id,
+                type,
+                template_name,
+                error_details,
                 updated_at,
                 created_at
             FROM ${this.schema}.message_logs
@@ -261,7 +293,11 @@ class DatabaseService {
             map[key] = {
                 status: row.status,
                 message_id: row.message_id,
-                updated_at: row.updated_at || row.created_at || null
+                type: row.type || null,
+                template_name: row.template_name || null,
+                error_details: row.error_details || null,
+                updated_at: row.updated_at || row.created_at || null,
+                created_at: row.created_at || null
             };
         }
 
@@ -274,7 +310,9 @@ class DatabaseService {
         let query = `
             SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
             FROM ${this.schema}.schedule_v sv
+            INNER JOIN ${this.schema}.schedule s ON s.schedule_id = sv.schedule_id
             WHERE sv.confirmed = false
+              AND COALESCE(s.active, true) = true
         `;
 
         const params = [];
@@ -311,17 +349,90 @@ class DatabaseService {
         return rows.map(row => this.mapAppointmentRow(row));
     }
 
+    async getCancelledAppointments(date = null) {
+        await this.ensureInitialized();
+
+        const params = [];
+        const conditions = ['COALESCE(s.active, true) = false'];
+
+        if (date) {
+            const baseDate = new Date(`${date}T00:00:00-03:00`);
+            const startEpoch = Math.floor(baseDate.getTime() / 1000);
+            const endEpoch = startEpoch + 86400;
+
+            conditions.push(`s."when" >= $${params.length + 1}`);
+            params.push(startEpoch);
+            conditions.push(`s."when" < $${params.length + 1}`);
+            params.push(endEpoch);
+        }
+
+        const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const scheduleQuery = `
+            SELECT s.schedule_id, s."when"
+            FROM ${this.schema}.schedule s
+            ${whereClause}
+            ORDER BY s."when" ASC
+        `;
+
+        const { rows: scheduleRows } = await this.pool.query(scheduleQuery, params);
+
+        if (!Array.isArray(scheduleRows) || scheduleRows.length === 0) {
+            return [];
+        }
+
+        const appointmentIds = scheduleRows.map(row => Number(row.schedule_id));
+
+        const detailsQuery = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            WHERE sv.schedule_id = ANY($1)
+        `;
+
+        const { rows: detailRows } = await this.pool.query(detailsQuery, [appointmentIds]);
+        const detailMap = {};
+        for (const row of detailRows) {
+            const mapped = this.mapAppointmentRow(row);
+            if (mapped?.id) {
+                detailMap[mapped.id] = mapped;
+            }
+        }
+
+        const logMap = await this.getLatestStatusesForAppointments(appointmentIds);
+
+        return scheduleRows.map(row => {
+            const id = Number(row.schedule_id);
+            const appointment = detailMap[id] ? { ...detailMap[id] } : { id, tratamento_date: new Date(row.when * 1000) };
+
+            appointment.active = false;
+            appointment.schedule_epoch = Number(row.when);
+
+            const log = logMap[id] || null;
+            if (log) {
+                appointment.latest_log = log;
+                appointment.cancelled_at = log.updated_at ? new Date(log.updated_at) : (log.created_at ? new Date(log.created_at) : null);
+            } else {
+                appointment.latest_log = null;
+                appointment.cancelled_at = null;
+            }
+
+            return appointment;
+        });
+    }
+
     async getPendingInWindowNoTemplate(lookbackDays = 1, lookaheadDays = 14, limit = 30) {
         await this.ensureInitialized();
 
-        const query = `
-            SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
-            FROM ${this.schema}.schedule_v sv
-            LEFT JOIN ${this.schema}.message_logs ml
+                const query = `
+                        SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
+                        FROM ${this.schema}.schedule_v sv
+                        INNER JOIN ${this.schema}.schedule s ON s.schedule_id = sv.schedule_id
+                        LEFT JOIN ${this.schema}.message_logs ml
                 ON ml.appointment_id::bigint = sv.schedule_id
                AND ml.type = 'template'
                AND ml.status IN ('sent', 'delivered', 'read')
             WHERE sv.confirmed = false
+                            AND COALESCE(s.active, true) = true
               AND to_timestamp(sv."when") BETWEEN (NOW() - ($1::int * INTERVAL '1 day')) AND (NOW() + ($2::int * INTERVAL '1 day'))
               AND ml.id IS NULL
             ORDER BY sv."when" ASC
@@ -394,13 +505,15 @@ class DatabaseService {
         }
 
         const clauses = variationsArray
-            .map((_, index) => `REGEXP_REPLACE(sv.patient_contacts, '\\D', '', 'g') LIKE '%' || $${index + 1} || '%'`)
+            .map((_, index) => `REGEXP_REPLACE(sv.patient_contacts, '\D', '', 'g') LIKE '%' || $${index + 1} || '%'`)
             .join(' OR ');
 
         const query = `
             SELECT sv.*, sv.schedule_id AS id, to_timestamp(sv."when") AS tratamento_date
             FROM ${this.schema}.schedule_v sv
+            INNER JOIN ${this.schema}.schedule s ON s.schedule_id = sv.schedule_id
             WHERE sv.confirmed = false
+              AND COALESCE(s.active, true) = true
               AND (${clauses})
             ORDER BY sv."when" ASC
             LIMIT 1
@@ -441,7 +554,148 @@ class DatabaseService {
             // Ignora: algumas bases podem não ter schedule_mv com coluna confirmed
         }
 
+        await this.syncScheduleViewState(scheduleId, {
+            confirmed: true,
+            active: true,
+            nowEpoch
+        });
+
         return { scheduleId, confirmed: true };
+    }
+
+    async cancelAppointment(scheduleId, options = {}) {
+        await this.ensureInitialized();
+
+        if (!scheduleId) {
+            throw new Error('scheduleId é obrigatório para cancelar agendamento');
+        }
+
+        const nowEpoch = this.getEpochSeconds();
+
+        const updateSchedule = `
+            UPDATE ${this.schema}.schedule
+            SET confirmed = false,
+                active = false,
+                updated_at = $2
+            WHERE schedule_id = $1
+        `;
+
+        await this.pool.query(updateSchedule, [scheduleId, nowEpoch]);
+
+        const updateScheduleMv = `
+            UPDATE ${this.schema}.schedule_mv
+            SET confirmed = false,
+                updated_at = $2
+            WHERE schedule_id = $1
+        `;
+
+        try {
+            await this.pool.query(updateScheduleMv, [scheduleId, nowEpoch]);
+        } catch (_) {
+            // Ignora: algumas bases podem não ter schedule_mv ou coluna confirmed
+        }
+
+        await this.syncScheduleViewState(scheduleId, {
+            confirmed: false,
+            active: false,
+            nowEpoch
+        });
+
+        const {
+            phone = null,
+            incomingMessageId = null,
+            messageBody = null,
+            cancelledBy = 'system',
+            source = null,
+            timestamp = null
+        } = options || {};
+
+        const shouldLog = phone || incomingMessageId || messageBody || cancelledBy || source;
+        if (shouldLog) {
+            await this.initMessageLogs();
+
+            const normalizedPhone = this.formatE164(phone) || phone || null;
+            const createdAt = (() => {
+                if (!timestamp) {
+                    return new Date();
+                }
+                const numericTs = Number(timestamp);
+                if (!Number.isFinite(numericTs)) {
+                    return new Date();
+                }
+                return new Date(numericTs > 1e12 ? numericTs : numericTs * 1000);
+            })();
+
+            const templateName = cancelledBy || source || null;
+
+            await this.pool.query(
+                `INSERT INTO ${this.schema}.message_logs
+                    (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+                 VALUES ($1, $2, $3, 'cancellation', $4, 'cancelled', $5, $6, $6)
+                 ON CONFLICT (message_id) DO UPDATE
+                    SET appointment_id = EXCLUDED.appointment_id,
+                        phone = EXCLUDED.phone,
+                        template_name = EXCLUDED.template_name,
+                        status = EXCLUDED.status,
+                        error_details = EXCLUDED.error_details,
+                        updated_at = EXCLUDED.updated_at`,
+                [
+                    String(scheduleId),
+                    normalizedPhone,
+                    incomingMessageId || null,
+                    templateName,
+                    messageBody || null,
+                    createdAt
+                ]
+            );
+
+            await this.updateLatestLogStatus(scheduleId, 'cancelled');
+        }
+
+        return { scheduleId, cancelled: true };
+    }
+
+    async syncScheduleViewState(scheduleId, { confirmed = null, active = null, nowEpoch = null } = {}) {
+        if (!scheduleId) {
+            return;
+        }
+
+        const setters = [];
+        if (confirmed !== null) {
+            setters.push(`confirmed = ${confirmed ? 'true' : 'false'}`);
+        }
+        if (active !== null) {
+            setters.push(`active = ${active ? 'true' : 'false'}`);
+        }
+
+        if (setters.length === 0) {
+            return;
+        }
+
+        const withNow = `${setters.join(', ')}, updated_at = NOW()`;
+        const withEpochPlaceholder = `${setters.join(', ')}, updated_at = $2`;
+
+        try {
+            await this.pool.query(
+                `UPDATE ${this.schema}.schedule_v
+                 SET ${withNow}
+                 WHERE schedule_id = $1`,
+                [scheduleId]
+            );
+        } catch (err) {
+            const epochValue = nowEpoch ?? this.getEpochSeconds();
+
+            try {
+                await this.pool.query(
+                    `UPDATE ${this.schema}.schedule_v
+                     SET ${withEpochPlaceholder}
+                     WHERE schedule_id = $1`,
+                    [scheduleId, epochValue]
+                );
+            } catch (innerErr) {
+                console.log('[DatabaseService] Falha ao atualizar schedule_v:', innerErr.message);
+            }
+        }
     }
 
     async registrarConfirmacao({
@@ -641,6 +895,8 @@ class DatabaseService {
 
         return rows.map(row => ({
             appointment_id: row.appointment_id,
+            patient_name: row.patient_name || null,
+            patient_contacts: row.patient_contacts || null,
             phone: row.patient_contacts || row.whatsapp_message_phone,
             confirmed_by: row.patient_name || null,
             confirmed_at: row.whatsapp_message_time ? new Date(row.whatsapp_message_time * 1000) : null,
