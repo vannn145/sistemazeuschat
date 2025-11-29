@@ -1,5 +1,6 @@
 const db = require('./database');
 const waba = require('./whatsapp-business');
+const { formatClinicDate, formatClinicTime } = require('../utils/datetime');
 
 function pickFirstPhone(raw) {
   if (!raw) return null;
@@ -23,10 +24,38 @@ class CronService {
     this.lookbackDays = Number(process.env.CRON_LOOKBACK_DAYS || 1);
     this.lookaheadDays = Number(process.env.CRON_LOOKAHEAD_DAYS || 14);
     this.batchSize = Number(process.env.CRON_BATCH_SIZE || 30);
+    this.timeZone = process.env.CRON_TIMEZONE || 'America/Sao_Paulo';
+    this.dispatchLeadDays = Number(process.env.CRON_DISPATCH_LEAD_DAYS || 1);
     this.timer = null;
     this.running = false;
     this.lastRun = null;
     this.lastResult = null;
+  }
+
+  toTimeZone(date) {
+    const source = date instanceof Date ? date : new Date(date);
+    const localized = source.toLocaleString('en-US', { timeZone: this.timeZone });
+    return new Date(localized);
+  }
+
+  nowInTimeZone() {
+    return this.toTimeZone(new Date());
+  }
+
+  startOfDay(date) {
+    const zoned = this.toTimeZone(date);
+    zoned.setHours(0, 0, 0, 0);
+    return zoned;
+  }
+
+  addDays(date, days) {
+    const result = new Date(date.getTime());
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  dateKey(date) {
+    return this.startOfDay(date).toISOString().slice(0, 10);
   }
 
   getStatus() {
@@ -37,6 +66,8 @@ class CronService {
       lookbackDays: this.lookbackDays,
       lookaheadDays: this.lookaheadDays,
       batchSize: this.batchSize,
+      timeZone: this.timeZone,
+      dispatchLeadDays: this.dispatchLeadDays,
       lastRun: this.lastRun,
       lastResult: this.lastResult,
     };
@@ -46,10 +77,41 @@ class CronService {
     if (this.running) return { skipped: true, reason: 'already_running' };
     this.running = true;
     const startedAt = new Date();
-    const summary = { startedAt, attempted: 0, sent: 0, failed: 0, items: [] };
+    const summary = {
+      startedAt,
+      attempted: 0,
+      sent: 0,
+      failed: 0,
+      items: [],
+      queued: 0,
+      filtered: 0,
+      targetDate: null,
+      skipped: false
+    };
     try {
       // Garante que a tabela de logs existe
       try { await db.initMessageLogs?.(); } catch {}
+
+      const templateName = process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
+      const locale = process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
+
+      const nowTz = this.nowInTimeZone();
+      const todayStart = this.startOfDay(nowTz);
+      const todayEnd = this.addDays(todayStart, 1);
+      const targetStart = this.addDays(todayStart, this.dispatchLeadDays);
+      const targetEnd = this.addDays(targetStart, 1);
+      const targetKey = this.dateKey(targetStart);
+      summary.targetDate = targetKey;
+
+      const alreadySentToday = await db.hasTemplateLogsBetween(todayStart, todayEnd, templateName);
+      if (alreadySentToday) {
+        summary.skipped = true;
+        summary.reason = 'already_sent_today';
+        this.lastRun = new Date();
+        this.lastResult = { ...summary, finishedAt: new Date() };
+        this.running = false;
+        return this.lastResult;
+      }
 
       // Buscar pendentes na janela e sem template enviado previamente
       const appts = await db.getPendingInWindowNoTemplate(
@@ -57,23 +119,29 @@ class CronService {
         this.lookaheadDays,
         this.batchSize
       );
-      summary.attempted = appts.length;
-      if (appts.length === 0) {
+      summary.queued = appts.length;
+
+      const candidates = appts.filter((a) => {
+        if (!a?.tratamento_date) return false;
+        const apptDate = this.startOfDay(a.tratamento_date);
+        return apptDate >= targetStart && apptDate < targetEnd;
+      });
+
+      summary.filtered = candidates.length;
+      summary.attempted = candidates.length;
+
+      if (candidates.length === 0) {
         this.lastRun = new Date();
         this.lastResult = { ...summary, finishedAt: new Date() };
         this.running = false;
         return this.lastResult;
       }
 
-      const templateName = process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
-      const locale = process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
-
-      for (let i = 0; i < appts.length; i++) {
-        const a = appts[i];
+      for (let i = 0; i < candidates.length; i++) {
+        const a = candidates[i];
         try {
-          const date = new Date(a.tratamento_date);
-          const dateBR = date.toLocaleDateString('pt-BR');
-          const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+          const dateBR = formatClinicDate(a.tratamento_date);
+          const timeBR = formatClinicTime(a.tratamento_date);
           const phone = pickFirstPhone(a.patient_contacts) || a.patient_contacts;
           if (!phone) {
             summary.items.push({ id: a.id, success: false, error: 'no_phone' });
@@ -93,7 +161,7 @@ class CronService {
             ];
           }
 
-          const result = await waba.sendTemplateMessage(phone, templateName, locale, components);
+          const result = await waba.sendTemplateMessage(phone, templateName, locale, components, { scheduleId: a.id });
           if (result?.messageId) {
             await db.logOutboundMessage({ appointmentId: a.id, phone, messageId: result.messageId, type: 'template', templateName, status: 'sent' });
           }
@@ -101,7 +169,7 @@ class CronService {
           summary.items.push({ id: a.id, success: true, phone, messageId: result?.messageId || null });
 
           // backoff leve para evitar rate limit
-          if (i < appts.length - 1) {
+          if (i < candidates.length - 1) {
             await new Promise(r => setTimeout(r, 800));
           }
         } catch (err) {

@@ -4,6 +4,7 @@ const axios = require('axios');
 require('dotenv').config({ override: true });
 const db = require('../src/services/database');
 const waba = require('../src/services/whatsapp-business');
+const { formatClinicDate, formatClinicTime } = require('../src/utils/datetime');
 
 const TEMPLATE_NAME = process.env.CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
 const LANGUAGE = 'pt_BR';
@@ -24,9 +25,8 @@ async function getTemplateStatus(name) {
 async function sendByName(patientName, phone) {
   const appt = await db.getAppointmentByPatientName(patientName);
   if (!appt) throw new Error('Nenhum agendamento encontrado para: ' + patientName);
-  const date = new Date(appt.tratamento_date);
-  const dateBR = date.toLocaleDateString('pt-BR');
-  const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const dateBR = formatClinicDate(appt.tratamento_date);
+  const timeBR = formatClinicTime(appt.tratamento_date);
   const components = [
     { type: 'body', parameters: [
       { type: 'text', text: appt.patient_name },
@@ -35,7 +35,7 @@ async function sendByName(patientName, phone) {
       { type: 'text', text: appt.main_procedure_term }
     ]}
   ];
-  return await waba.sendTemplateMessage(phone, TEMPLATE_NAME, LANGUAGE, components);
+  return await waba.sendTemplateMessage(phone, TEMPLATE_NAME, LANGUAGE, components, { scheduleId: appt.id });
 }
 
 async function main() {

@@ -2,6 +2,7 @@
 require('dotenv').config({ override: true });
 const db = require('../src/services/database');
 const whatsappBusiness = require('../src/services/whatsapp-business');
+const { formatClinicDate, formatClinicTime } = require('../src/utils/datetime');
 
 function extractPhone(appointment) {
     const raw = appointment?.preferred_phone || appointment?.patient_contacts || appointment?.patient_phones;
@@ -37,9 +38,8 @@ function extractPhone(appointment) {
 
         const templateName = process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
         const lang = process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
-        const date = new Date(appointment.tratamento_date);
-        const dateBR = date.toLocaleDateString('pt-BR');
-        const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const dateBR = formatClinicDate(appointment.tratamento_date);
+        const timeBR = formatClinicTime(appointment.tratamento_date);
         let components = [];
         if (templateName !== 'confirmao_de_agendamento') {
             components = [
@@ -55,7 +55,7 @@ function extractPhone(appointment) {
             ];
         }
 
-        const result = await whatsappBusiness.sendTemplateMessage(phone, templateName, lang, components);
+        const result = await whatsappBusiness.sendTemplateMessage(phone, templateName, lang, components, { scheduleId: appointment.id });
         console.log('Envio Business API:', JSON.stringify(result, null, 2));
 
         if (result?.messageId) {

@@ -85,6 +85,7 @@ const cronService = require('../services/cron');
 const whatsappService = require('../services/whatsapp-hybrid');
 const whatsappBusiness = require('../services/whatsapp-business');
 const axios = require('axios');
+const { formatClinicDate, formatClinicTime } = require('../utils/datetime');
 
 // Log simples de requisições para depuração
 router.use((req, res, next) => {
@@ -154,8 +155,9 @@ router.post('/whatsapp/connect', async (req, res) => {
                 let components = [];
                 if (!req.query.components && templateName === (process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada')) {
                     const patientName = req.query.patientName || 'Paciente';
-                    const dateBR = req.query.dateBR || new Date().toLocaleDateString('pt-BR');
-                    const timeBR = req.query.timeBR || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const now = new Date();
+                    const dateBR = req.query.dateBR || formatClinicDate(now);
+                    const timeBR = req.query.timeBR || formatClinicTime(now);
                     const procedure = req.query.procedure || 'Exame';
                     components = [
                         { type: 'body', parameters: [
@@ -503,9 +505,8 @@ router.post('/send/preview-by-name', async (req, res) => {
                 const lang = process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
                 let components = [];
                 if (name !== 'confirmao_de_agendamento') {
-                    const date = new Date(appointment.tratamento_date);
-                    const dateBR = date.toLocaleDateString('pt-BR');
-                    const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const dateBR = formatClinicDate(appointment.tratamento_date);
+                    const timeBR = formatClinicTime(appointment.tratamento_date);
                     components = [
                         { type: 'body', parameters: [
                             { type: 'text', text: appointment.patient_name },
@@ -515,7 +516,7 @@ router.post('/send/preview-by-name', async (req, res) => {
                         ]}
                     ];
                 }
-                templateResult = await whatsappBusiness.sendTemplateMessage(phone, name, lang, components);
+                templateResult = await whatsappBusiness.sendTemplateMessage(phone, name, lang, components, { scheduleId: appointment.id });
             } catch (e) {
                 // Prosseguir mesmo se template falhar; o envio de texto pode falhar se não houver janela aberta
                 console.warn('Aviso: falha ao enviar template inicial:', e.response?.data || e.message);
@@ -716,8 +717,9 @@ router.post('/test-template', async (req, res) => {
         let components = (req.body && Array.isArray(req.body.components)) ? req.body.components : [];
         if ((!components || components.length === 0) && name === (process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada')) {
             const patientName = req.body?.patientName || 'Paciente';
-            const dateBR = req.body?.dateBR || new Date().toLocaleDateString('pt-BR');
-            const timeBR = req.body?.timeBR || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            const now = new Date();
+            const dateBR = req.body?.dateBR || formatClinicDate(now);
+            const timeBR = req.body?.timeBR || formatClinicTime(now);
             const procedure = req.body?.procedure || 'Exame';
             components = [
                 { type: 'body', parameters: [
@@ -752,9 +754,8 @@ router.post('/send/confirm-template-by-name', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Nenhum agendamento encontrado para este paciente' });
         }
 
-        const date = new Date(appointment.tratamento_date);
-        const dateBR = date.toLocaleDateString('pt-BR');
-        const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const dateBR = formatClinicDate(appointment.tratamento_date);
+        const timeBR = formatClinicTime(appointment.tratamento_date);
 
         const name = templateName || (process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmao_de_agendamento');
         let components = [];
@@ -772,7 +773,7 @@ router.post('/send/confirm-template-by-name', async (req, res) => {
             ];
         }
 
-        const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components);
+        const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components, { scheduleId: appointment.id });
         try {
             if (result?.messageId) {
                 if (appointment && typeof appointment.id === 'number' && result?.messageId) {
@@ -804,9 +805,8 @@ router.post('/send/confirm-template/:id', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Paciente sem telefone válido' });
         }
 
-        const date = new Date(appointment.tratamento_date);
-        const dateBR = date.toLocaleDateString('pt-BR');
-        const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const dateBR = formatClinicDate(appointment.tratamento_date);
+        const timeBR = formatClinicTime(appointment.tratamento_date);
 
         const name = templateName || (process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmao_de_agendamento');
         let components = [];
@@ -824,7 +824,7 @@ router.post('/send/confirm-template/:id', async (req, res) => {
             ];
         }
 
-        const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components);
+        const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components, { scheduleId: appointment.id });
         try {
             if (result?.messageId) {
                 await dbService.logOutboundMessage({ appointmentId: appointment.id, phone, messageId: result.messageId, type: 'template', templateName: name, status: 'sent' });
@@ -873,9 +873,8 @@ router.post('/send/bulk-template', async (req, res) => {
                 }
                 let components = [];
                 if (name !== 'confirmao_de_agendamento') {
-                    const date = new Date(appointment.tratamento_date);
-                    const dateBR = date.toLocaleDateString('pt-BR');
-                    const timeBR = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                    const dateBR = formatClinicDate(appointment.tratamento_date);
+                    const timeBR = formatClinicTime(appointment.tratamento_date);
                     components = [
                         {
                             type: 'body',
@@ -889,7 +888,7 @@ router.post('/send/bulk-template', async (req, res) => {
                     ];
                 }
 
-                const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components);
+                const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components, { scheduleId: appointment.id });
                 results.push({ id, success: true, messageId: result.messageId, phone, appointment });
                 if (result?.messageId) {
                     try {

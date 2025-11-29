@@ -3,6 +3,7 @@ const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { formatClinicDateTime } = require('../utils/datetime');
 
 class WhatsAppService {
     constructor() {
@@ -323,9 +324,7 @@ class WhatsAppService {
     }
 
     generateMessage(appointment) {
-        const date = new Date(appointment.tratamento_date);
-        const formattedDate = date.toLocaleDateString('pt-BR');
-        const formattedTime = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const { date: formattedDate, time: formattedTime } = formatClinicDateTime(appointment.tratamento_date);
 
         return `🏥 *Confirmação de Agendamento*
 

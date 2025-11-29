@@ -25,6 +25,73 @@
             border-left: 4px solid #007bff;
             margin-bottom: 10px;
         }
+        .patient-status-tag {
+            margin-left: 8px;
+            font-size: 0.75rem;
+        }
+        .status-tag {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.7rem;
+        }
+        .status-tag i {
+            font-size: 0.75rem;
+        }
+        .status-tag-label {
+            display: inline-block;
+        }
+        .status-tag-confirmed {
+            background-color: #d1e7dd;
+            color: #0f5132;
+            border: 1px solid #badbcc;
+        }
+        .status-tag-cancelled {
+            background-color: #f8d7da;
+            color: #842029;
+            border: 1px solid #f5c2c7;
+        }
+        .recent-confirmation-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .recent-confirmation-body {
+            flex: 1;
+        }
+        .recent-confirmation-title {
+            font-weight: 600;
+        }
+        .recent-confirmation-procedure {
+            color: #0d6efd;
+            font-size: 0.85rem;
+        }
+        .recent-confirmation-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 0.8rem;
+        }
+        .recent-confirmation-message {
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+        .recent-confirmation-tag {
+            flex-shrink: 0;
+        }
+        button.is-refreshing .fa-sync {
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
         .loading {
             display: none;
         }
@@ -156,10 +223,15 @@
                     </div>
                 </div>
 
-                <!-- Confirmações Recentes (TOPO) -->
-                <div class="mb-4" style="border-bottom:1px solid #eee; padding-bottom:10px;">
-                    <h6>Confirmações Recentes</h6>
-                    <div id="confirmations-container">
+                <!-- Confirmações Recentes -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0"><i class="fas fa-check-circle"></i> Confirmações Recentes</h6>
+                        <button class="btn btn-outline-secondary btn-sm" id="refresh-confirmations-btn">
+                            <i class="fas fa-sync"></i>
+                        </button>
+                    </div>
+                    <div class="card-body" id="confirmations-container">
                         <small class="text-muted">Carregando...</small>
                     </div>
                 </div>

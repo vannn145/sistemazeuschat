@@ -68,6 +68,7 @@ const useTemplateCheckbox = document.getElementById('use-template');
 const refreshBtn = document.getElementById('refresh-btn');
 const selectAllBtn = document.getElementById('select-all-btn');
 const testMessageBtn = document.getElementById('test-message-btn');
+const refreshConfirmationsBtn = document.getElementById('refresh-confirmations-btn');
 // On-Prem elements
 let onpremRequestBtn, onpremVerifyBtn, onpremCC, onpremPhone, onpremMethod, onpremCert, onpremCode, onpremPin;
 
@@ -81,6 +82,17 @@ selectAllBtn.addEventListener('click', toggleSelectAll);
 testMessageBtn.addEventListener('click', () => {
     new bootstrap.Modal(document.getElementById('testModal')).show();
 });
+
+if (refreshConfirmationsBtn) {
+    refreshConfirmationsBtn.addEventListener('click', async () => {
+        refreshConfirmationsBtn.classList.add('is-refreshing');
+        try {
+            await renderRecentConfirmations();
+        } finally {
+            refreshConfirmationsBtn.classList.remove('is-refreshing');
+        }
+    });
+}
 
 document.getElementById('send-test-btn').addEventListener('click', sendTestMessage);
 
@@ -346,6 +358,7 @@ function renderAppointments() {
         
         const statusInfo = statusesMap[appointment.id];
         const statusBadge = renderStatusBadge(statusInfo?.status);
+        const statusTag = renderStatusTag(statusInfo?.status);
         return `
             <div class="appointment-card card mb-2">
                 <div class="card-body p-3">
@@ -355,7 +368,7 @@ function renderAppointments() {
                                 value="${appointment.id}" ${isSelected ? 'checked' : ''}>
                         </div>
                         <div class="col-md-3">
-                            <strong>${appointment.patient_name}</strong><br>
+                            <strong>${appointment.patient_name}<span class="patient-status-tag" data-apt-id="${appointment.id}">${statusTag}</span></strong><br>
                             <small class="text-muted">${appointment.patient_contacts}</small>
                         </div>
                         <div class="col-md-3">
@@ -603,6 +616,19 @@ function showLoading(show) {
     loading.style.display = show ? 'block' : 'none';
 }
 
+function formatDateTime(dateInput) {
+    if (!dateInput) return '-';
+    const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
 // ================= On-Premises helpers =================
 async function requestOnPremCode() {
     try {
@@ -645,6 +671,17 @@ async function verifyOnPremCode() {
     } catch (e) {}
 }
 
+function renderStatusTag(status) {
+    if (!status) return '';
+    const map = {
+        confirmed: { cls: 'status-tag-confirmed', text: 'jóia', icon: 'fa-gem', title: 'Confirmado pelo paciente' },
+        cancelled: { cls: 'status-tag-cancelled', text: 'cancelado', icon: 'fa-times-circle', title: 'Cancelado pelo paciente' }
+    };
+    const cfg = map[status];
+    if (!cfg) return '';
+    return `<span class="status-tag ${cfg.cls}" title="${cfg.title}"><i class="fas ${cfg.icon}"></i><span class="status-tag-label">${cfg.text}</span></span>`;
+}
+
 function renderStatusBadge(status) {
     if (!status) return '<span class="badge bg-secondary">sem envio</span>';
     const map = {
@@ -665,6 +702,11 @@ function updateStatusBadges() {
         const status = statusesMap[id]?.status;
         el.innerHTML = renderStatusBadge(status);
     });
+    document.querySelectorAll('.patient-status-tag').forEach(el => {
+        const id = parseInt(el.getAttribute('data-apt-id'));
+        const status = statusesMap[id]?.status;
+        el.innerHTML = renderStatusTag(status);
+    });
 }
 
 // Novas funções para confirmações recentes
@@ -679,12 +721,29 @@ async function renderRecentConfirmations() {
                 container.innerHTML = '<small class="text-muted">Nenhuma confirmação recente.</small>';
                 return;
             }
-            container.innerHTML = `<ul class="list-group">
-                ${data.data.map(c => `<li class="list-group-item">
-                    <strong>${c.phone}</strong> confirmado por <span class="text-primary">${c.confirmed_by || c.confirmedBy || 'sistema'}</span><br>
-                    <small>${new Date(c.confirmed_at || c.confirmedAt).toLocaleString('pt-BR')}</small>
-                    ${c.message_body ? `<br><small class="text-muted">"${c.message_body}"</small>` : ''}
-                </li>`).join('')}
+            container.innerHTML = `<ul class="list-group list-group-flush">
+                ${data.data.map(c => {
+                    const confirmedAt = formatDateTime(c.confirmed_at || c.confirmedAt);
+                    const name = c.patient_name || c.patientName || c.phone || 'Paciente';
+                    const phone = c.phone || c.patient_contacts || '';
+                    const procedure = c.main_procedure_term || '';
+                    const messageBody = c.message_body || c.messageBody || '';
+                    const confirmer = c.confirmed_by || c.confirmedBy || 'sistema';
+                    const tag = renderStatusTag('confirmed');
+                    return `<li class="list-group-item recent-confirmation-item">
+                        <div class="recent-confirmation-body">
+                            <div class="recent-confirmation-title">${name}</div>
+                            ${procedure ? `<div class="recent-confirmation-procedure">${procedure}</div>` : ''}
+                            ${phone ? `<div class="recent-confirmation-contact text-muted">${phone}</div>` : ''}
+                            <div class="recent-confirmation-meta text-muted">
+                                <span>${confirmedAt}</span>
+                                <span>por ${confirmer}</span>
+                            </div>
+                            ${messageBody ? `<div class="recent-confirmation-message text-muted">“${messageBody}”</div>` : ''}
+                        </div>
+                        <div class="recent-confirmation-tag">${tag}</div>
+                    </li>`;
+                }).join('')}
             </ul>`;
         } else {
             container.innerHTML = '<small class="text-danger">Erro ao carregar confirmações.</small>';

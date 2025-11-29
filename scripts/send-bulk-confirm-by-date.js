@@ -3,6 +3,7 @@
 require('dotenv').config({ override: true });
 const db = require('../src/services/database');
 const waba = require('../src/services/whatsapp-business');
+const { formatClinicDate, formatClinicTime } = require('../src/utils/datetime');
 
 function pickFirstPhone(raw) {
   if (!raw) return null;
@@ -51,9 +52,8 @@ async function main() {
     // Montar componentes apenas se o template exigir variáveis
     let components = [];
     if (templateName !== 'confirmao_de_agendamento') {
-      const dateObj = new Date(a.tratamento_date);
-      const dateBR = dateObj.toLocaleDateString('pt-BR');
-      const timeBR = dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const dateBR = formatClinicDate(a.tratamento_date);
+      const timeBR = formatClinicTime(a.tratamento_date);
       components = [
         { type: 'body', parameters: [
           { type: 'text', text: a.patient_name },
@@ -64,7 +64,7 @@ async function main() {
       ];
     }
     try {
-      const r = await waba.sendTemplateMessage(phone, templateName, 'pt_BR', components);
+      const r = await waba.sendTemplateMessage(phone, templateName, 'pt_BR', components, { scheduleId: a.id });
       const messageId = r.messageId || r.response?.messages?.[0]?.id;
       results.push({ id: a.id, patient_name: a.patient_name, phone, success: true, type: 'template', messageId });
       // Registrar log de saída para exibir status no painel
