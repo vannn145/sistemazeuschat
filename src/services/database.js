@@ -458,6 +458,35 @@ class DatabaseService {
         return this.mapAppointmentRow(rows[0] || null);
     }
 
+    async getAppointmentByMessageId(messageId) {
+        await this.ensureInitialized();
+
+        if (!messageId) {
+            return null;
+        }
+
+        const query = `
+            SELECT ml.appointment_id::bigint AS schedule_id
+            FROM ${this.schema}.message_logs ml
+            WHERE ml.message_id = $1
+            ORDER BY COALESCE(ml.updated_at, ml.created_at) DESC NULLS LAST
+            LIMIT 1
+        `;
+
+        const { rows } = await this.pool.query(query, [messageId]);
+        const scheduleId = rows[0]?.schedule_id;
+        if (!scheduleId) {
+            return null;
+        }
+
+        try {
+            return await this.getAppointmentById(Number(scheduleId));
+        } catch (err) {
+            console.log('[DatabaseService] Falha ao carregar agendamento por message_id:', err.message);
+            return null;
+        }
+    }
+
     async getAppointmentByPatientName(patientName) {
         await this.ensureInitialized();
 

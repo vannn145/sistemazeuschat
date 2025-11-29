@@ -434,12 +434,25 @@ class WhatsAppBusinessService {
                 }
             }
 
-            const apt = appointmentFromHint || await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            const contextMessageId = incomingMessage?.context?.id || incomingMessage?.context?.message_id || null;
+            let appointmentFromContext = null;
+            if (contextMessageId) {
+                try {
+                    appointmentFromContext = await dbService.getAppointmentByMessageId(contextMessageId);
+                    if (!appointmentFromContext) {
+                        console.log(`ℹ️  Nenhum agendamento vinculado à mensagem ${contextMessageId} recebida no contexto do webhook.`);
+                    }
+                } catch (contextErr) {
+                    console.log(`⚠️  Falha ao localizar agendamento pelo contexto ${contextMessageId}:`, contextErr.message);
+                }
+            }
+
+            const apt = appointmentFromHint || appointmentFromContext || await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
             const confirmationText = this.extractIncomingText(incomingMessage);
             const confirmationTimestamp = incomingMessage?.timestamp ? Number(incomingMessage.timestamp) : null;
 
             const result = await dbService.registrarConfirmacao({
-                appointmentId: appointmentFromHint?.id || hintedAppointmentId || apt?.id,
+                appointmentId: appointmentFromHint?.id || appointmentFromContext?.id || hintedAppointmentId || apt?.id,
                 phone: phoneNumber,
                 confirmedBy: 'paciente',
                 messageBody: confirmationText,
@@ -448,7 +461,7 @@ class WhatsAppBusinessService {
                 timestamp: confirmationTimestamp
             });
 
-            let appointmentForMessage = appointmentFromHint || apt;
+            let appointmentForMessage = appointmentFromHint || appointmentFromContext || apt;
             if (!appointmentForMessage && result?.appointmentId) {
                 try {
                     appointmentForMessage = await dbService.getAppointmentById(result.appointmentId);
