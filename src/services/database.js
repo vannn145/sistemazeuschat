@@ -681,6 +681,12 @@ class DatabaseService {
             await this.updateLatestLogStatus(scheduleId, 'cancelled');
         }
 
+        try {
+            await this.removeAppointmentFromAgenda(scheduleId);
+        } catch (purgeError) {
+            console.log('[DatabaseService] Falha ao remover agendamento da agenda:', purgeError.message);
+        }
+
         return { scheduleId, cancelled: true };
     }
 
@@ -724,6 +730,44 @@ class DatabaseService {
             } catch (innerErr) {
                 console.log('[DatabaseService] Falha ao atualizar schedule_v:', innerErr.message);
             }
+        }
+    }
+
+    async removeAppointmentFromAgenda(scheduleId) {
+        await this.ensureInitialized();
+
+        if (!scheduleId) {
+            return;
+        }
+
+        const numericId = Number(scheduleId);
+        if (!Number.isFinite(numericId)) {
+            return;
+        }
+
+        const targets = [
+            { table: 'schedule_mv', delete: true },
+            { table: 'schedule_v', delete: true }
+        ];
+
+        for (const target of targets) {
+            try {
+                await this.pool.query(
+                    `DELETE FROM ${this.schema}.${target.table} WHERE schedule_id = $1`,
+                    [numericId]
+                );
+            } catch (err) {
+                console.log(`[DatabaseService] Aviso: falha ao atualizar ${target.table} na remoção do agendamento ${numericId}:`, err.message);
+            }
+        }
+
+        try {
+            await this.pool.query(
+                `DELETE FROM ${this.schema}.schedule WHERE schedule_id = $1`,
+                [numericId]
+            );
+        } catch (err) {
+            console.log(`[DatabaseService] Aviso: falha ao remover registro base da agenda ${numericId}:`, err.message);
         }
     }
 
