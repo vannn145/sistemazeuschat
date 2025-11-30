@@ -745,30 +745,56 @@ class DatabaseService {
             return;
         }
 
-        const targets = [
-            { table: 'schedule_mv', delete: true },
-            { table: 'schedule_v', delete: true }
-        ];
+        const nowEpoch = this.getEpochSeconds();
+        let baseRemoved = false;
 
-        for (const target of targets) {
+        try {
+            await this.pool.query(
+                `DELETE FROM ${this.schema}.schedule_mv WHERE schedule_id = $1`,
+                [numericId]
+            );
+        } catch (err) {
+            console.log(`[DatabaseService] Aviso: falha ao atualizar schedule_mv na remoção do agendamento ${numericId}:`, err.message);
+        }
+
+        try {
+            const { rowCount } = await this.pool.query(
+                `DELETE FROM ${this.schema}.schedule WHERE schedule_id = $1`,
+                [numericId]
+            );
+            baseRemoved = rowCount > 0;
+        } catch (err) {
+            console.log(`[DatabaseService] Aviso: falha ao remover registro base da agenda ${numericId}:`, err.message);
+        }
+
+        if (!baseRemoved) {
             try {
                 await this.pool.query(
-                    `DELETE FROM ${this.schema}.${target.table} WHERE schedule_id = $1`,
-                    [numericId]
+                    `UPDATE ${this.schema}.schedule
+                     SET confirmed = false,
+                         active = false,
+                         updated_at = $2
+                     WHERE schedule_id = $1`,
+                    [numericId, nowEpoch]
                 );
             } catch (err) {
-                console.log(`[DatabaseService] Aviso: falha ao atualizar ${target.table} na remoção do agendamento ${numericId}:`, err.message);
+                console.log(`[DatabaseService] Aviso: falha ao sinalizar agendamento ${numericId} como inativo:`, err.message);
             }
         }
 
         try {
             await this.pool.query(
-                `DELETE FROM ${this.schema}.schedule WHERE schedule_id = $1`,
-                [numericId]
+                `UPDATE ${this.schema}.treatment
+                 SET treatment_status_id = 2,
+                     ended_at = COALESCE(ended_at, $2)
+                 WHERE schedule_id = $1
+                   AND COALESCE(treatment_status_id, 0) <> 2`,
+                [numericId, nowEpoch]
             );
         } catch (err) {
-            console.log(`[DatabaseService] Aviso: falha ao remover registro base da agenda ${numericId}:`, err.message);
+            console.log(`[DatabaseService] Aviso: falha ao sinalizar tratamento relacionado ao agendamento ${numericId} como cancelado:`, err.message);
         }
+
     }
 
     async registrarConfirmacao({
