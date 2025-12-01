@@ -480,7 +480,13 @@ class WhatsAppBusinessService {
                         : undefined;
 
                     if (status.status === 'failed') {
-                        console.warn(`⚠️  Mensagem ${status.id} marcada como FAILED`, { errors: trimmedErrors });
+                        console.warn(`⚠️  Mensagem ${status.id} marcada como FAILED`, {
+                            errors: trimmedErrors || null,
+                            rawErrorsPresent: Array.isArray(status.errors) && status.errors.length > 0
+                        });
+                        if (!trimmedErrors || trimmedErrors.length === 0) {
+                            console.warn(`⚠️  WhatsApp retornou status FAILED sem detalhar o erro para ${status.id}. Verifique o painel Meta ou registros adicionais.`);
+                        }
                     } else {
                         console.log(`📊 Status da mensagem ${status.id}: ${status.status}`);
                     }
