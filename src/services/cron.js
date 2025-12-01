@@ -176,6 +176,23 @@ class CronService {
           const details = err?.response?.data || err?.message || String(err);
           summary.failed++;
           summary.items.push({ id: a.id, success: false, error: details });
+          try {
+            const placeholderId = `failed-${a.id || 'unknown'}-${Date.now()}`;
+            await db.logOutboundMessage({
+              appointmentId: a.id,
+              phone,
+              messageId: placeholderId,
+              type: 'template',
+              templateName,
+              status: 'failed',
+              errorDetails: details,
+              retryCount: 0,
+              nextRetryAt: null,
+              lastAttemptAt: new Date()
+            });
+          } catch (logError) {
+            console.log('⚠️  Falha ao registrar erro do template:', logError.message);
+          }
         }
       }
 

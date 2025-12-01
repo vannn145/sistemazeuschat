@@ -158,24 +158,40 @@ class DatabaseService {
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_appointment ON ${this.schema}.message_logs (appointment_id)`);
         await this.pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_message_logs_message_id_unique ON ${this.schema}.message_logs (message_id)`);
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_created_at ON ${this.schema}.message_logs (created_at DESC)`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`);
     }
 
-    async logOutboundMessage({ appointmentId, phone, messageId, type, templateName, status, errorDetails = null }) {
-        if (!messageId) {
-            return;
+    normalizeErrorDetails(details) {
+        if (!details) {
+            return null;
         }
+        if (typeof details === 'string') {
+            return details.slice(0, 4000);
+        }
+        try {
+            return JSON.stringify(details).slice(0, 4000);
+        } catch (_) {
+            return String(details).slice(0, 4000);
+        }
+    }
 
+    async logOutboundMessage({ appointmentId, phone, messageId, type, templateName, status, errorDetails = null, retryCount = 0, nextRetryAt = null, lastAttemptAt = null }) {
         await this.ensureInitialized();
         await this.initMessageLogs();
 
         const normalizedPhone = this.formatE164(phone) || phone || null;
         const now = new Date();
+        const attemptAt = lastAttemptAt instanceof Date ? lastAttemptAt : now;
+        const normalizedError = this.normalizeErrorDetails(errorDetails);
+        const safeMessageId = messageId || null;
 
         const query = `
             INSERT INTO ${this.schema}.message_logs
-                (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+                (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at, retry_count, next_retry_at, last_attempt_at)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)
             ON CONFLICT (message_id) DO UPDATE
                 SET appointment_id = EXCLUDED.appointment_id,
                     phone = EXCLUDED.phone,
@@ -183,21 +199,29 @@ class DatabaseService {
                     template_name = EXCLUDED.template_name,
                     status = EXCLUDED.status,
                     error_details = EXCLUDED.error_details,
-                    updated_at = EXCLUDED.updated_at
+                    updated_at = EXCLUDED.updated_at,
+                    retry_count = EXCLUDED.retry_count,
+                    next_retry_at = EXCLUDED.next_retry_at,
+                    last_attempt_at = EXCLUDED.last_attempt_at
+            RETURNING *
         `;
 
         const params = [
             appointmentId ? String(appointmentId) : null,
             normalizedPhone,
-            messageId,
+            safeMessageId,
             type || null,
             templateName || null,
             status || null,
-            errorDetails || null,
-            now
+            normalizedError,
+            now,
+            retryCount,
+            nextRetryAt,
+            attemptAt
         ];
 
-        await this.pool.query(query, params);
+        const { rows } = await this.pool.query(query, params);
+        return rows[0] || null;
     }
 
     async hasTemplateLogsBetween(startDate, endDate, templateName = null) {
@@ -229,7 +253,146 @@ class DatabaseService {
         return Boolean(rows[0]?.present);
     }
 
-    async updateMessageStatus(messageId, status, errorDetails = null) {
+    async getMessageLogsForRetry({
+        limit = 10,
+        statuses = ['failed', 'error'],
+        types = ['template'],
+        maxRetryCount = 3,
+        lookbackMinutes = null
+    } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const conditions = [
+            'type = ANY($1)',
+            'status = ANY($2)',
+            'COALESCE(retry_count, 0) < $3',
+            '(next_retry_at IS NULL OR next_retry_at <= NOW())'
+        ];
+
+        const params = [types, statuses, maxRetryCount];
+        let paramIndex = params.length;
+
+        if (lookbackMinutes !== null && Number.isFinite(lookbackMinutes)) {
+            paramIndex += 1;
+            conditions.push(`created_at >= NOW() - ($${paramIndex}::int * INTERVAL '1 minute')`);
+            params.push(Math.floor(lookbackMinutes));
+        }
+
+        paramIndex += 1;
+        const limitIndex = paramIndex;
+        params.push(Math.max(1, Math.floor(limit)));
+
+        const query = `
+            SELECT *
+            FROM ${this.schema}.message_logs
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY COALESCE(last_attempt_at, updated_at, created_at) ASC
+            LIMIT $${limitIndex}
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+        return rows || [];
+    }
+
+    async getRecentLogsByType({
+        types = [],
+        statuses = [],
+        limit = 50,
+        lookbackMinutes = null
+    } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        if (!Array.isArray(types) || types.length === 0) {
+            return [];
+        }
+
+        const params = [types];
+        const conditions = ['type = ANY($1)'];
+        let paramIndex = 1;
+
+        if (Array.isArray(statuses) && statuses.length > 0) {
+            paramIndex += 1;
+            conditions.push(`status = ANY($${paramIndex})`);
+            params.push(statuses);
+        }
+
+        if (lookbackMinutes !== null && Number.isFinite(lookbackMinutes)) {
+            paramIndex += 1;
+            conditions.push(`created_at >= NOW() - ($${paramIndex}::int * INTERVAL '1 minute')`);
+            params.push(Math.floor(lookbackMinutes));
+        }
+
+        paramIndex += 1;
+        const limitIndex = paramIndex;
+        params.push(Math.max(1, Math.floor(limit)));
+
+        const query = `
+            SELECT *
+            FROM ${this.schema}.message_logs
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY COALESCE(updated_at, created_at) DESC
+            LIMIT $${limitIndex}
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+        return rows || [];
+    }
+
+    async updateMessageLogById(logId, updates = {}) {
+        if (!logId) {
+            return null;
+        }
+
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const fields = { ...updates };
+        if (!Object.prototype.hasOwnProperty.call(fields, 'updated_at')) {
+            fields.updated_at = new Date();
+        }
+
+        if (Object.prototype.hasOwnProperty.call(fields, 'error_details')) {
+            fields.error_details = this.normalizeErrorDetails(fields.error_details);
+        }
+
+        if (Object.prototype.hasOwnProperty.call(fields, 'next_retry_at') && fields.next_retry_at === undefined) {
+            fields.next_retry_at = null;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(fields, 'last_attempt_at') && !(fields.last_attempt_at instanceof Date)) {
+            fields.last_attempt_at = fields.last_attempt_at ? new Date(fields.last_attempt_at) : new Date();
+        }
+
+        if (Object.prototype.hasOwnProperty.call(fields, 'message_id') && fields.message_id !== null && fields.message_id !== undefined) {
+            fields.message_id = String(fields.message_id);
+        }
+
+        const columns = [];
+        const params = [];
+        let index = 1;
+
+        for (const [column, value] of Object.entries(fields)) {
+            columns.push(`${column} = $${index}`);
+            params.push(value);
+            index++;
+        }
+
+        params.push(logId);
+
+        const query = `
+            UPDATE ${this.schema}.message_logs
+            SET ${columns.join(', ')}
+            WHERE id = $${index}
+            RETURNING *
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+        return rows[0] || null;
+    }
+
+    async updateMessageStatus(messageId, status, errorDetails = null, options = {}) {
         if (!messageId) {
             return;
         }
@@ -238,26 +401,62 @@ class DatabaseService {
         await this.initMessageLogs();
 
         const now = new Date();
+        const normalizedError = this.normalizeErrorDetails(errorDetails);
+
+        const fields = {
+            status: status || null,
+            error_details: normalizedError,
+            updated_at: now
+        };
+
+        if (Object.prototype.hasOwnProperty.call(options, 'retryCount')) {
+            fields.retry_count = options.retryCount;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(options, 'nextRetryAt')) {
+            fields.next_retry_at = options.nextRetryAt || null;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(options, 'lastAttemptAt')) {
+            fields.last_attempt_at = options.lastAttemptAt || now;
+        }
+
+        const columns = [];
+        const params = [messageId];
+        let index = 2;
+        for (const [column, value] of Object.entries(fields)) {
+            columns.push(`${column} = $${index}`);
+            params.push(value);
+            index++;
+        }
 
         const updateQuery = `
             UPDATE ${this.schema}.message_logs
-            SET status = $2,
-                error_details = $3,
-                updated_at = $4
+            SET ${columns.join(', ')}
             WHERE message_id = $1
         `;
 
-        const result = await this.pool.query(updateQuery, [messageId, status || null, errorDetails || null, now]);
+        const result = await this.pool.query(updateQuery, params);
 
         if (result.rowCount === 0) {
+            const retryCount = Object.prototype.hasOwnProperty.call(options, 'retryCount')
+                ? options.retryCount
+                : 0;
+            const nextRetryAt = Object.prototype.hasOwnProperty.call(options, 'nextRetryAt')
+                ? options.nextRetryAt || null
+                : null;
+            const lastAttemptAt = Object.prototype.hasOwnProperty.call(options, 'lastAttemptAt')
+                ? options.lastAttemptAt || now
+                : now;
+
             const insertQuery = `
                 INSERT INTO ${this.schema}.message_logs
-                    (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
+                    (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at, retry_count, next_retry_at, last_attempt_at)
                 VALUES
-                    (NULL, NULL, $1, 'status', NULL, $2, $3, $4, $4)
+                    (NULL, NULL, $1, 'status', NULL, $2, $3, $4, $4, $5, $6, $7)
             `;
 
-            await this.pool.query(insertQuery, [messageId, status || null, errorDetails || null, now]);
+            await this.pool.query(insertQuery, [messageId, status || null, normalizedError, now, retryCount, nextRetryAt, lastAttemptAt]);
         }
     }
 

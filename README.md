@@ -247,6 +247,25 @@ Rotas de administração:
 Deduplicação:
 - O cron não reenvia para agendamentos que já possuem registro na tabela `message_logs` com `type='template'` e `status` diferente de `failed`.
 
+## ♻️ Cron de retentativa e sincronização
+
+Para garantir que falhas temporárias sejam corrigidas automaticamente, o projeto inclui um segundo cron que varre a tabela `message_logs`, identifica envios de template marcados como `failed` e tenta novamente com backoff exponencial. Ele também revisita registros de confirmação/desmarcação para garantir que o estado no banco esteja alinhado.
+
+Variáveis principais no `.env`:
+
+```
+RETRY_CRON_ENABLED=true                # Habilita o cron de retentativa
+RETRY_CRON_INTERVAL_MS=300000          # Intervalo entre ciclos (5 min)
+RETRY_CRON_BATCH_SIZE=20               # Máximo de registros reprocessados por ciclo
+RETRY_CRON_MAX_ATTEMPTS=3              # Limite de tentativas antes de desistir
+RETRY_CRON_BACKOFF_BASE_SECONDS=90     # Base do backoff exponencial entre tentativas
+RETRY_CRON_SYNC_STATES=true            # Reaplica confirmações/cancelamentos quando necessário
+RETRY_CRON_STATE_BATCH_SIZE=20         # Lote para sincronização de estados
+RETRY_CRON_STATE_LOOKBACK_MINUTES=1440 # Janela de busca (ex.: 24h)
+```
+
+Logs reprocessados com sucesso recebem status `*_synced`, evitando ciclos desnecessários. Falhas repetidas são reagendadas com um `next_retry_at`, que cresce exponencialmente.
+
 ## 🤝 Suporte
 
 Para suporte técnico:

@@ -10,6 +10,7 @@ require('dotenv').config({ override: true });
 const dbService = require('./src/services/database');
 const whatsappService = require('./src/services/whatsapp-hybrid');
 const cronService = require('./src/services/cron');
+const retryCronService = require('./src/services/retry-cron');
 const messageRoutes = require('./src/routes/messages');
 
 const app = express();
@@ -95,6 +96,15 @@ async function startServer() {
                 }
             } else {
                 console.log('⏸️  Cron desabilitado (defina CRON_ENABLED=true para ativar).');
+            }
+
+            if (retryCronService.isEnabled()) {
+                const startedRetry = retryCronService.start();
+                if (startedRetry) {
+                    console.log('♻️  Retry Cron habilitado. Intervalo(ms):', process.env.RETRY_CRON_INTERVAL_MS || 300000);
+                }
+            } else {
+                console.log('⏸️  Retry Cron desabilitado (defina RETRY_CRON_ENABLED=true para ativar).');
             }
         });
         
