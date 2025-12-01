@@ -556,7 +556,7 @@ class WhatsAppBusinessService {
 
             if (result?.appointmentId && appointmentForMessage) {
                 const { date: dateBR, time: timeBR } = formatClinicDateTime(appointmentForMessage.tratamento_date);
-                const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 3199-3069.`;
+                const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 99889-95211.`;
                 await this.sendMessage(phoneNumber, thanks);
                 console.log(`🏁 Agendamento ${result.appointmentId} confirmado via webhook por ${phoneNumber}`);
             } else {
@@ -616,8 +616,8 @@ class WhatsAppBusinessService {
             }
             // Aqui poderíamos registrar um status de cancelamento ou alertar a equipe.
             const msg = (appointmentFromHint || apt)
-                ? 'Recebemos seu pedido e removemos seu agendamento. Para reagendar, fale com nossa equipe no (34) 3199-3069.'
-                : 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 3199-3069.';
+                ? 'Recebemos seu pedido e removemos seu agendamento. Para reagendar, fale com nossa equipe no (34) 99889-95211.'
+                : 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 99889-95211.';
             await this.sendMessage(phoneNumber, msg);
         } catch (error) {
             console.error('Erro ao processar cancelamento:', error.response?.data || error.message);
@@ -685,7 +685,7 @@ Você tem um agendamento marcado na CD CENTER UBERABA:
 🔬 *Procedimento:* ${appointment.main_procedure_term}
 
 Para confirmar seu agendamento, responda *SIM*.
-Para reagendar, entre em contato: (34) 3199-3069
+    Para reagendar, entre em contato: (34) 99889-95211
 
 _Esta é uma mensagem automática do sistema de agendamentos._`;
     }
@@ -694,7 +694,7 @@ _Esta é uma mensagem automática do sistema de agendamentos._`;
         return {
             isConfigured: !!(this.accessToken && this.phoneNumberId),
             hasApiAccess: true,
-            phoneNumber: '+55 34 3199-3069'
+            phoneNumber: '+55 34 99889-95211'
         };
     }
 }
