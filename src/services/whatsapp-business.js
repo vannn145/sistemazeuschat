@@ -419,7 +419,13 @@ class WhatsAppBusinessService {
 
             console.log('📥 Webhook recebido:', {
                 messages: messages.map(m => ({ type: m.type, id: m.id, from: m.from, button: m.button?.text, interactive: m.interactive?.button_reply?.title || m.interactive?.list_reply?.title })),
-                statuses: statuses.map(s => ({ id: s.id, status: s.status }))
+                statuses: statuses.map(s => ({
+                    id: s.id,
+                    status: s.status,
+                    errors: Array.isArray(s.errors)
+                        ? s.errors.map(err => ({ code: err.code, title: err.title, details: err.details, href: err.href }))
+                        : undefined
+                }))
             });
 
             // Processar mensagens recebidas (confirmações via texto ou botão)
@@ -463,9 +469,23 @@ class WhatsAppBusinessService {
             // Processar status de entrega
             statuses.forEach(async (status) => {
                 try {
-                    console.log(`📊 Status da mensagem ${status.id}: ${status.status}`);
+                    const trimmedErrors = Array.isArray(status.errors)
+                        ? status.errors.map(err => ({
+                            code: err.code,
+                            title: err.title,
+                            details: err.details,
+                            href: err.href,
+                            description: err.error_data?.details || err.description || err.message
+                        }))
+                        : undefined;
+
+                    if (status.status === 'failed') {
+                        console.warn(`⚠️  Mensagem ${status.id} marcada como FAILED`, { errors: trimmedErrors });
+                    } else {
+                        console.log(`📊 Status da mensagem ${status.id}: ${status.status}`);
+                    }
                     const dbService = require('./database');
-                    await dbService.updateMessageStatus(status.id, status.status, status.errors ? JSON.stringify(status.errors) : null);
+                    await dbService.updateMessageStatus(status.id, status.status, trimmedErrors ? JSON.stringify(trimmedErrors) : null);
                 } catch (e) {
                     console.log('⚠️  Falha ao atualizar status da mensagem:', e.message);
                 }
