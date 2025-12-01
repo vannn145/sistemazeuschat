@@ -206,6 +206,7 @@ class WhatsAppBusinessService {
                 error: graphError || error.message,
                 status: error.response?.status,
                 attempt,
+                fbtrace_id: graphError?.fbtrace_id,
                 payload: {
                     to: payload?.to,
                     template: {
