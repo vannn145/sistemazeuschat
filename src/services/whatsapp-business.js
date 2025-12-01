@@ -136,21 +136,30 @@ class WhatsAppBusinessService {
     }
 
     async sendTemplateMessage(to, templateName, languageCode, components = [], options = {}) {
+        const receivedOptions = options || {};
+        const { __retryAttempt, ...publicOptions } = receivedOptions;
+        const attempt = Number(__retryAttempt || 0) || 0;
+        const rawRetryLimit = receivedOptions.retryLimit;
+        const retryLimit = Number.isFinite(rawRetryLimit) && rawRetryLimit >= 0
+            ? Math.floor(rawRetryLimit)
+            : 1;
+
+        const cleanNumber = to.replace(/\D/g, '');
+        const tplName = templateName || process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
+        const lang = languageCode || process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
+        const templateComponents = this.buildTemplateComponents(components, publicOptions);
+        const payload = {
+            messaging_product: 'whatsapp',
+            to: cleanNumber,
+            type: 'template',
+            template: {
+                name: tplName,
+                language: { code: lang },
+                components: templateComponents
+            }
+        };
+
         try {
-            const cleanNumber = to.replace(/\D/g, '');
-            const tplName = templateName || process.env.DEFAULT_CONFIRM_TEMPLATE_NAME || 'confirmacao_personalizada';
-            const lang = languageCode || process.env.DEFAULT_CONFIRM_TEMPLATE_LOCALE || 'pt_BR';
-            const templateComponents = this.buildTemplateComponents(components, options);
-            const payload = {
-                messaging_product: 'whatsapp',
-                to: cleanNumber,
-                type: 'template',
-                template: {
-                    name: tplName,
-                    language: { code: lang },
-                    components: templateComponents
-                }
-            };
             const response = await axios.post(
                 `${this.baseURL}/${this.phoneNumberId}/messages`,
                 payload,
@@ -170,7 +179,55 @@ class WhatsAppBusinessService {
                 response: response.data
             };
         } catch (error) {
-            console.error('❌ Erro ao enviar template:', error.response?.data || error.message);
+            const errorData = error.response?.data;
+            const graphError = errorData?.error;
+            const previewComponents = Array.isArray(payload?.template?.components)
+                ? payload.template.components.map((component) => {
+                    const preview = {
+                        type: component.type,
+                        sub_type: component.sub_type,
+                        index: component.index
+                    };
+                    if (Array.isArray(component.parameters)) {
+                        preview.parameters = component.parameters.map((param) => {
+                            if (param.type === 'text') {
+                                return { type: 'text', text: String(param.text ?? '').slice(0, 64) };
+                            }
+                            if (param.type === 'payload') {
+                                return { type: 'payload', payload: String(param.payload ?? '').slice(0, 64) };
+                            }
+                            return { type: param.type };
+                        });
+                    }
+                    return preview;
+                })
+                : undefined;
+            console.error('❌ Erro ao enviar template:', {
+                error: graphError || error.message,
+                status: error.response?.status,
+                attempt,
+                payload: {
+                    to: payload?.to,
+                    template: {
+                        name: payload?.template?.name,
+                        language: payload?.template?.language,
+                        components: previewComponents
+                    }
+                }
+            });
+
+            const shouldRetry = graphError?.code === 131000 && attempt < retryLimit;
+            if (shouldRetry) {
+                const delayMs = 1000 * (attempt + 1);
+                console.warn(`⏳ Retentativa para template '${tplName}' em ${delayMs}ms (tentativa ${attempt + 1}/${retryLimit + 1})`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                return this.sendTemplateMessage(to, templateName, languageCode, components, {
+                    ...publicOptions,
+                    retryLimit,
+                    __retryAttempt: attempt + 1
+                });
+            }
+
             throw error;
         }
     }
