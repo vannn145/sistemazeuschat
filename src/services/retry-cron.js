@@ -13,6 +13,7 @@ class RetryCronService {
         this.stateSyncEnabled = String(process.env.RETRY_CRON_SYNC_STATES || 'true').toLowerCase() === 'true';
         this.stateBatchSize = Number(process.env.RETRY_CRON_STATE_BATCH_SIZE || 20);
         this.stateLookbackMinutes = Number(process.env.RETRY_CRON_STATE_LOOKBACK_MINUTES || 1440);
+        this.resendTemplates = String(process.env.RETRY_CRON_RESEND_TEMPLATES || 'false').toLowerCase() === 'true';
         this.timer = null;
         this.running = false;
         this.lastRun = null;
@@ -91,15 +92,20 @@ class RetryCronService {
         };
 
         try {
-            const retryLogs = await db.getMessageLogsForRetry({
-                limit: this.batchSize,
-                statuses: this.retryStatuses,
-                types: ['template'],
-                maxRetryCount: this.maxAttempts
-            });
+            if (this.resendTemplates) {
+                const retryLogs = await db.getMessageLogsForRetry({
+                    limit: this.batchSize,
+                    statuses: this.retryStatuses,
+                    types: ['template'],
+                    maxRetryCount: this.maxAttempts
+                });
 
-            for (const log of retryLogs) {
-                await this.retryTemplateSend(log, summary);
+                for (const log of retryLogs) {
+                    await this.retryTemplateSend(log, summary);
+                }
+            } else if (summary) {
+                summary.notes = summary.notes || [];
+                summary.notes.push('template_resend_disabled');
             }
 
             if (this.stateSyncEnabled) {
