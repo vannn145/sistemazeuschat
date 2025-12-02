@@ -19,9 +19,11 @@ const adminRoutes = require('./src/routes/admin');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+const ADMIN_ASSETS_DIR = path.join(__dirname, 'public', 'admin');
 
 // Middleware
 app.use(cors());
+app.use('/admin/assets', express.static(ADMIN_ASSETS_DIR));
 app.use(express.json({
     limit: process.env.BODY_LIMIT || '2mb',
     verify: (req, res, buf) => {

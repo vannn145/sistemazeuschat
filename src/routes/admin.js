@@ -14,8 +14,6 @@ const ADMIN_UI_DIR = path.join(__dirname, '../../public/admin');
 const DASHBOARD_HTML = path.join(ADMIN_UI_DIR, 'index.html');
 const LOGIN_HTML = path.join(ADMIN_UI_DIR, 'login.html');
 
-router.use('/assets', express.static(ADMIN_UI_DIR));
-
 function ensureAuthenticated(req, res, next) {
     if (req?.session?.isAdmin) {
         return next();
