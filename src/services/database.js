@@ -94,6 +94,36 @@ class DatabaseService {
         return digits.length >= 10 ? `55${digits}` : digits;
     }
 
+    buildPhoneVariations(phone) {
+        const digits = this.sanitizePhone(phone);
+        if (!digits) {
+            return [];
+        }
+
+        const variations = new Set();
+        variations.add(digits);
+
+        if (digits.startsWith('55')) {
+            const withoutDdi = digits.slice(2);
+            if (withoutDdi) {
+                variations.add(withoutDdi);
+            }
+        } else if (digits.length >= 10) {
+            variations.add(`55${digits}`);
+        }
+
+        if (digits.length > 11) {
+            variations.add(digits.slice(-11));
+        }
+
+        if (digits.length > 10) {
+            variations.add(digits.slice(-10));
+        }
+
+        const normalized = Array.from(variations).filter(Boolean);
+        return normalized.length ? normalized : [digits];
+    }
+
     getEpochSeconds() {
         return Math.floor(Date.now() / 1000);
     }
@@ -643,6 +673,47 @@ class DatabaseService {
         return rows.map(row => this.mapAppointmentRow(row));
     }
 
+    async getAppointmentsForReminder({
+        startDate,
+        endDate,
+        limit = 50,
+        requireConfirmed = false
+    } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        if (!startDate || !endDate) {
+            return [];
+        }
+
+        const conditions = [
+            'COALESCE(s.active, true) = true',
+            'to_timestamp(s."when") BETWEEN $1 AND $2'
+        ];
+        const params = [startDate, endDate];
+
+        if (requireConfirmed) {
+            conditions.push('sv.confirmed = true');
+        }
+
+        const query = `
+            SELECT sv.*, sv.schedule_id AS id, to_timestamp(s."when") AS tratamento_date
+            FROM ${this.schema}.schedule_v sv
+            INNER JOIN ${this.schema}.schedule s ON s.schedule_id = sv.schedule_id
+            LEFT JOIN ${this.schema}.message_logs ml
+                ON ml.appointment_id::bigint = sv.schedule_id
+               AND ml.type = 'reminder'
+               AND ml.status IN ('sent', 'delivered', 'read')
+            WHERE ${conditions.join(' AND ')}
+              AND ml.id IS NULL
+            ORDER BY s."when" ASC
+            LIMIT $3
+        `;
+
+        const { rows } = await this.pool.query(query, [...params, Math.max(1, Math.floor(limit))]);
+        return rows.map(row => this.mapAppointmentRow(row));
+    }
+
     async getAppointmentById(id) {
         await this.ensureInitialized();
 
@@ -704,29 +775,7 @@ class DatabaseService {
     async getLatestPendingAppointmentByPhone(phone) {
         await this.ensureInitialized();
 
-        const digits = this.sanitizePhone(phone);
-        if (!digits) {
-            return null;
-        }
-
-        const variations = new Set();
-        variations.add(digits);
-
-        if (digits.startsWith('55')) {
-            variations.add(digits.slice(2));
-        } else {
-            variations.add(`55${digits}`);
-        }
-
-        if (digits.length > 11) {
-            variations.add(digits.slice(-11));
-        }
-
-        if (digits.length > 10) {
-            variations.add(digits.slice(-10));
-        }
-
-        const variationsArray = Array.from(variations).filter(Boolean);
+        const variationsArray = this.buildPhoneVariations(phone);
 
         if (variationsArray.length === 0) {
             return null;
@@ -749,6 +798,43 @@ class DatabaseService {
 
         const { rows } = await this.pool.query(query, variationsArray);
         return this.mapAppointmentRow(rows[0] || null);
+    }
+
+    async getLatestAppointmentFromLogsByPhone(phone) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const variationsArray = this.buildPhoneVariations(phone);
+        if (variationsArray.length === 0) {
+            return null;
+        }
+
+        const clauses = variationsArray
+            .map((_, index) => `REGEXP_REPLACE(ml.phone, '\\D', '', 'g') LIKE '%' || $${index + 1} || '%'`)
+            .join(' OR ');
+
+        const query = `
+            SELECT ml.appointment_id
+            FROM ${this.schema}.message_logs ml
+            WHERE ml.appointment_id IS NOT NULL
+              AND (${clauses})
+            ORDER BY COALESCE(ml.updated_at, ml.created_at) DESC NULLS LAST
+            LIMIT 1
+        `;
+
+        const { rows } = await this.pool.query(query, variationsArray);
+        const appointmentIdRaw = rows[0]?.appointment_id;
+        const appointmentId = appointmentIdRaw ? Number(appointmentIdRaw) : null;
+        if (!appointmentId) {
+            return null;
+        }
+
+        try {
+            return await this.getAppointmentById(appointmentId);
+        } catch (err) {
+            console.log('[DatabaseService] Falha ao carregar agendamento via logs:', err.message);
+            return null;
+        }
     }
 
     async confirmAppointment(scheduleId) {
@@ -1014,6 +1100,13 @@ class DatabaseService {
         } else if (phone) {
             target = await this.getLatestPendingAppointmentByPhone(phone);
             appointmentId = target?.id;
+            if (!target) {
+                const fromLogs = await this.getLatestAppointmentFromLogsByPhone(phone);
+                if (fromLogs) {
+                    target = fromLogs;
+                    appointmentId = fromLogs.id;
+                }
+            }
         }
 
         if (appointmentId) {

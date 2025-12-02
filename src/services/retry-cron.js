@@ -10,6 +10,7 @@ class RetryCronService {
         this.maxAttempts = Number(process.env.RETRY_CRON_MAX_ATTEMPTS || 3);
         this.backoffBaseSeconds = Number(process.env.RETRY_CRON_BACKOFF_BASE_SECONDS || 90);
         this.retryStatuses = this.parseList(process.env.RETRY_CRON_STATUSES, ['failed', 'error']);
+        this.retryTypes = this.parseList(process.env.RETRY_CRON_TYPES, ['template', 'reminder']);
         this.stateSyncEnabled = String(process.env.RETRY_CRON_SYNC_STATES || 'true').toLowerCase() === 'true';
         this.stateBatchSize = Number(process.env.RETRY_CRON_STATE_BATCH_SIZE || 20);
         this.stateLookbackMinutes = Number(process.env.RETRY_CRON_STATE_LOOKBACK_MINUTES || 1440);
@@ -96,7 +97,7 @@ class RetryCronService {
                 const retryLogs = await db.getMessageLogsForRetry({
                     limit: this.batchSize,
                     statuses: this.retryStatuses,
-                    types: ['template'],
+                    types: this.retryTypes,
                     maxRetryCount: this.maxAttempts
                 });
 

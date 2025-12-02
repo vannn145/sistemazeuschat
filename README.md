@@ -266,6 +266,22 @@ RETRY_CRON_STATE_LOOKBACK_MINUTES=1440 # Janela de busca (ex.: 24h)
 
 Logs reprocessados com sucesso recebem status `*_synced`, evitando ciclos desnecessários. Falhas repetidas são reagendadas com um `next_retry_at`, que cresce exponencialmente.
 
+## ⏰ Cron de lembrete pré-consulta
+
+Para enviar um lembrete automático (ex.: 1 dia antes), habilite o cron dedicado e informe o template Utility aprovado:
+
+```
+REMINDER_CRON_ENABLED=true
+REMINDER_CRON_INTERVAL_MS=300000       # A cada 5 minutos
+REMINDER_CRON_LEAD_DAYS=1              # Antecedência: 1 dia
+REMINDER_CRON_BATCH_SIZE=40            # Máximo por ciclo
+REMINDER_CRON_REQUIRE_CONFIRMED=false  # Defina true se quiser lembrar apenas confirmados
+REMINDER_TEMPLATE_NAME=lembrete_consulta_cdcenter
+REMINDER_TEMPLATE_LOCALE=pt_BR
+```
+
+O serviço busca agendamentos ativos na janela alvo, evita duplicidades consultando `message_logs` (`type='reminder'`) e usa os mesmos placeholders do template de confirmação: paciente, data, horário e procedimento.
+
 ## 🤝 Suporte
 
 Para suporte técnico:

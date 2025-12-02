@@ -11,6 +11,7 @@ const dbService = require('./src/services/database');
 const whatsappService = require('./src/services/whatsapp-hybrid');
 const cronService = require('./src/services/cron');
 const retryCronService = require('./src/services/retry-cron');
+const reminderCronService = require('./src/services/reminder-cron');
 const messageRoutes = require('./src/routes/messages');
 
 const app = express();
@@ -105,6 +106,15 @@ async function startServer() {
                 }
             } else {
                 console.log('⏸️  Retry Cron desabilitado (defina RETRY_CRON_ENABLED=true para ativar).');
+            }
+
+            if (reminderCronService.isEnabled()) {
+                const startedReminder = reminderCronService.start();
+                if (startedReminder) {
+                    console.log('⏰  Reminder Cron habilitado. Intervalo(ms):', process.env.REMINDER_CRON_INTERVAL_MS || 300000);
+                }
+            } else {
+                console.log('⏸️  Reminder Cron desabilitado (defina REMINDER_CRON_ENABLED=true para ativar).');
             }
         });
         

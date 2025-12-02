@@ -531,7 +531,21 @@ class WhatsAppBusinessService {
                 }
             }
 
-            const apt = appointmentFromHint || appointmentFromContext || await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+            let apt = appointmentFromHint || appointmentFromContext || null;
+            if (!apt) {
+                try {
+                    apt = await dbService.getLatestPendingAppointmentByPhone(phoneNumber);
+                } catch (pendingErr) {
+                    console.log('⚠️  Falha ao buscar pendente por telefone no webhook:', pendingErr.message);
+                }
+            }
+            if (!apt) {
+                try {
+                    apt = await dbService.getLatestAppointmentFromLogsByPhone(phoneNumber);
+                } catch (logLookupErr) {
+                    console.log('⚠️  Falha ao buscar agendamento via logs no webhook:', logLookupErr.message);
+                }
+            }
             const confirmationText = this.extractIncomingText(incomingMessage);
             const confirmationTimestamp = incomingMessage?.timestamp ? Number(incomingMessage.timestamp) : null;
 
