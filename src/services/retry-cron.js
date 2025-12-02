@@ -362,6 +362,17 @@ class RetryCronService {
             summary.items.push({ id: log.id, type: log.type, success: false, error: errorDetails });
         }
     }
+
+    getStatus() {
+        return {
+            enabled: this.enabled,
+            running: this.running,
+            intervalMs: this.intervalMs,
+            batchSize: this.batchSize,
+            lastRun: this.lastRun,
+            lastResult: this.lastResult
+        };
+    }
 }
 
 module.exports = new RetryCronService();

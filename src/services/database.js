@@ -1371,6 +1371,49 @@ class DatabaseService {
         return combined.slice(0, limit);
     }
 
+    async getMessageLogStats({ startDate = null, endDate = null } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const conditions = [];
+        const params = [];
+
+        if (startDate) {
+            params.push(startDate);
+            conditions.push(`created_at >= $${params.length}`);
+        }
+
+        if (endDate) {
+            params.push(endDate);
+            conditions.push(`created_at < $${params.length}`);
+        }
+
+        const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+        const query = `
+            SELECT type, status, COUNT(*) AS total
+            FROM ${this.schema}.message_logs
+            ${whereClause}
+            GROUP BY type, status
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+        const summary = { total: 0, types: {} };
+
+        for (const row of rows) {
+            const type = row.type || 'unknown';
+            const status = row.status || 'unknown';
+            const count = Number(row.total || 0);
+            summary.total += count;
+            if (!summary.types[type]) {
+                summary.types[type] = { total: 0, statuses: {} };
+            }
+            summary.types[type].total += count;
+            summary.types[type].statuses[status] = count;
+        }
+
+        return summary;
+    }
+
     async getAppointmentStats() {
         await this.ensureInitialized();
 

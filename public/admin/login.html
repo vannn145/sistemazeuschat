@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zeus Chat · Login</title>
+    <link rel="stylesheet" href="/admin/assets/style.css">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <script defer src="/admin/assets/login.js"></script>
+</head>
+<body class="login-page">
+    <div class="login-card">
+        <h1>Zeus Chat</h1>
+        <p>Entre para acompanhar os disparos em tempo real.</p>
+        <form id="loginForm">
+            <label>Usuário
+                <input type="text" name="username" autocomplete="username" required>
+            </label>
+            <label>Senha
+                <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+            <button type="submit" class="primary">Entrar</button>
+        </form>
+        <div id="loginError" class="login-error" hidden>Credenciais inválidas.</div>
+    </div>
+</body>
+</html>

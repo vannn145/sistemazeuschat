@@ -1,8 +1,8 @@
-
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const LOG_FILE = 'logs/patient_logs.json';
+const activityLog = require('../services/activity-log');
 
 // Endpoint para estatísticas de agendamentos
 router.get('/appointments/stats', async (req, res) => {
@@ -316,6 +316,14 @@ router.post('/whatsapp/webhook', (req, res) => {
             hasSignature: Boolean(signature),
             rawBodyLength: req.rawBody ? req.rawBody.length : null,
             contentType: req.headers['content-type']
+        });
+        activityLog.appendEvent({
+            type: 'webhook_in',
+            metadata: {
+                hasSignature: Boolean(signature),
+                contentType: req.headers['content-type'] || null
+            },
+            payload: req.body
         });
         const result = whatsappService.handleWebhook(req.body, signature, req.rawBody);
         res.json(result);

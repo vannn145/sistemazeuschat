@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zeus Chat · Painel</title>
+    <link rel="stylesheet" href="/admin/assets/style.css">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <script defer src="/admin/assets/app.js"></script>
+</head>
+<body class="dashboard">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-logo">⚡</span>
+            <div>
+                <h1>Zeus Chat</h1>
+                <p>Painel de operações</p>
+            </div>
+        </div>
+        <div class="top-actions">
+            <button id="refreshButton" class="primary">Atualizar</button>
+            <button id="logoutButton" class="ghost">Sair</button>
+        </div>
+    </header>
+
+    <main class="content">
+        <section class="cards" id="overviewCards">
+            <article class="card">
+                <h2>Total 30 dias</h2>
+                <p class="value" data-field="stats.total">--</p>
+            </article>
+            <article class="card">
+                <h2>Confirmados</h2>
+                <p class="value success" data-field="stats.confirmed">--</p>
+            </article>
+            <article class="card">
+                <h2>Pendentes</h2>
+                <p class="value warning" data-field="stats.pending">--</p>
+            </article>
+            <article class="card">
+                <h2>Envios hoje</h2>
+                <p class="value" data-field="logs.sent">--</p>
+                <small data-field="logs.details">--</small>
+            </article>
+            <article class="card">
+                <h2>Falhas hoje</h2>
+                <p class="value danger" data-field="logs.failed">--</p>
+                <small data-field="logs.failedDetails">--</small>
+            </article>
+        </section>
+
+        <section class="panel">
+            <header class="panel-header">
+                <h3>Status dos Crons</h3>
+            </header>
+            <div class="cron-grid" id="cronStatus"></div>
+        </section>
+
+        <section class="panel">
+            <header class="panel-header">
+                <h3>Envios recentes</h3>
+                <div class="panel-actions">
+                    <label>
+                        Tipo
+                        <select id="logsTypeFilter">
+                            <option value="all">Todos</option>
+                            <option value="template">Template</option>
+                            <option value="reminder">Lembrete</option>
+                            <option value="confirmation">Confirmação</option>
+                            <option value="cancellation">Cancelamento</option>
+                        </select>
+                    </label>
+                    <label>
+                        Status
+                        <select id="logsStatusFilter">
+                            <option value="">Todos</option>
+                            <option value="sent">Enviado</option>
+                            <option value="failed">Falhou</option>
+                            <option value="retrying">Retentando</option>
+                            <option value="confirmed">Confirmado</option>
+                            <option value="cancelled">Cancelado</option>
+                        </select>
+                    </label>
+                </div>
+            </header>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Horário</th>
+                            <th>Tipo</th>
+                            <th>Status</th>
+                            <th>Paciente</th>
+                            <th>Procedimento</th>
+                            <th>Telefone</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsTableBody">
+                        <tr><td colspan="6">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <header class="panel-header">
+                <h3>Webhook recentes</h3>
+            </header>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Horário</th>
+                            <th>Origem</th>
+                            <th>Resumo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="webhookTableBody">
+                        <tr><td colspan="3">Carregando...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <span id="footerStamp">Atualizado agora</span>
+    </footer>
+</body>
+</html>

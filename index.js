@@ -4,6 +4,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const session = require('express-session');
 // Forçar que as variáveis do .env sobrescrevam variáveis de ambiente já definidas
 require('dotenv').config({ override: true });
 
@@ -13,6 +14,7 @@ const cronService = require('./src/services/cron');
 const retryCronService = require('./src/services/retry-cron');
 const reminderCronService = require('./src/services/reminder-cron');
 const messageRoutes = require('./src/routes/messages');
+const adminRoutes = require('./src/routes/admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,10 +29,28 @@ app.use(express.json({
         req.rawBody = buf.toString();
     }
 }));
-app.use(express.static('public'));
 
+const sessionSecret = process.env.ADMIN_SESSION_SECRET || 'zeus-chat-session-secret';
+if (!process.env.ADMIN_SESSION_SECRET) {
+    console.warn('⚠️  ADMIN_SESSION_SECRET não configurado; usando valor padrão (não recomendado em produção).');
+}
+
+app.use(session({
+    name: 'zeuschat.sid',
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: Number(process.env.ADMIN_SESSION_MAX_AGE || 1000 * 60 * 60 * 8)
+    }
+}));
+app.use('/admin', adminRoutes);
+app.use(express.static('public'));
 // Routes
 app.use('/api/messages', messageRoutes);
+app.use('/admin', adminRoutes);
 // Expor rota de confirmações recentes diretamente em /api/confirmations/recent
 app.get('/api/confirmations/recent', (req, res) => {
     // Acessa o array do router

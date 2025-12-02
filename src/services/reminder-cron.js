@@ -230,6 +230,17 @@ class ReminderCronService {
 
         return summary;
     }
+
+    getStatus() {
+        return {
+            enabled: this.enabled,
+            running: this.running,
+            intervalMs: this.intervalMs,
+            leadDays: this.leadDays,
+            lastRun: this.lastRun,
+            lastResult: this.lastResult
+        };
+    }
 }
 
 module.exports = new ReminderCronService();

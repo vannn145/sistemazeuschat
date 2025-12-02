@@ -282,6 +282,28 @@ REMINDER_TEMPLATE_LOCALE=pt_BR
 
 O serviço busca agendamentos ativos na janela alvo, evita duplicidades consultando `message_logs` (`type='reminder'`) e usa os mesmos placeholders do template de confirmação: paciente, data, horário e procedimento.
 
+## 🔐 Painel Zeus Chat (Admin)
+
+O painel administrativo fornece visualização em tempo real dos disparos, webhook recebidos e status dos crons.
+
+- **URL:** `https://seu-servidor/admin`
+- **Login:** definido via variáveis no `.env`
+- **Recursos:** cards de métricas, status dos crons, tabela de logs de envio, tabela de webhooks recentes.
+
+Variáveis necessárias:
+
+```
+ADMIN_USER=admin                 # Usuário de acesso
+ADMIN_PASS=defina_sua_senha      # Senha obrigatória
+ADMIN_SESSION_SECRET=troque_este_valor
+ADMIN_DISPLAY_NAME=Operações Zeus Chat
+ADMIN_SESSION_MAX_AGE=28800000   # (opcional) tempo da sessão em ms
+```
+
+> ⚠️ Configure `ADMIN_PASS` e `ADMIN_SESSION_SECRET` antes de expor o painel em produção. Sem esses valores o login é bloqueado.
+
+Os dados apresentados são alimentados pela tabela `message_logs` e pelo arquivo `logs/webhook-events.json`. Para limpar o histórico dos webhooks basta remover esse arquivo (o serviço recria automaticamente).
+
 ## 🤝 Suporte
 
 Para suporte técnico:
