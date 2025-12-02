@@ -2,6 +2,29 @@ const db = require('./database');
 const waba = require('./whatsapp-business');
 const { formatClinicDate, formatClinicTime } = require('../utils/datetime');
 
+function pickFirstPhone(raw) {
+    if (!raw) {
+        return null;
+    }
+    const parts = String(raw).split(/[;|,\n\r\t]/g);
+    for (const piece of parts) {
+        const digits = (piece.match(/\d+/g) || []).join('');
+        if (!digits) {
+            continue;
+        }
+        let normalized = digits;
+        if (!normalized.startsWith('55')) {
+            if (normalized.length >= 10 && normalized.length <= 11) {
+                normalized = `55${normalized}`;
+            }
+        }
+        if (normalized.length >= 12 && normalized.length <= 13) {
+            return `+${normalized}`;
+        }
+    }
+    return null;
+}
+
 class ReminderCronService {
     constructor() {
         this.enabled = String(process.env.REMINDER_CRON_ENABLED || 'false').toLowerCase() === 'true';
@@ -147,11 +170,14 @@ class ReminderCronService {
                 return summary;
             }
 
+            console.log('🔔 Reminder cron localizado', appointments.length, 'agendamentos para', summary.targetDate);
+
             for (const appointment of appointments) {
-                const phone = appointment.patient_contacts || null;
+                const phone = pickFirstPhone(appointment.patient_contacts) || appointment.patient_contacts || null;
                 if (!phone) {
                     summary.failed++;
                     summary.items.push({ id: appointment.id, success: false, error: 'no_phone' });
+                    console.log('⚠️  Reminder cron sem telefone para agendamento', appointment.id);
                     continue;
                 }
 
