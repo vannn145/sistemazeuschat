@@ -632,6 +632,14 @@ router.post('/appointments/status/batch', async (req, res) => {
         const map = await dbService.getLatestStatusesForAppointments(appointmentIds.map(Number));
         res.json({ success: true, data: map });
     } catch (error) {
+        if (error.code === 'ZEUS_DB_TIMEOUT') {
+            return res.status(504).json({
+                success: false,
+                message: 'Tempo limite consultando status das mensagens; tente novamente em instantes.',
+                timeoutMs: error.timeoutMs || null
+            });
+        }
+
         res.status(500).json({ success: false, message: error.message });
     }
 });

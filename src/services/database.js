@@ -1,25 +1,83 @@
 ﻿const { Pool } = require('pg');
 
+const DEFAULT_CONNECTION_TIMEOUT_MS = 10000;
+const DEFAULT_IDLE_TIMEOUT_MS = 30000;
+const hasAbortController = typeof globalThis.AbortController === 'function';
+
+function parsePositiveInt(value) {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+        return undefined;
+    }
+
+    return Math.floor(parsed);
+}
+
+function createDbTimeoutError(label, timeoutMs, original) {
+    const message = label ? `Database query timed out (${label})` : 'Database query timed out';
+    const error = new Error(message);
+    error.code = 'ZEUS_DB_TIMEOUT';
+
+    if (Number.isFinite(timeoutMs)) {
+        error.timeoutMs = timeoutMs;
+    }
+
+    if (original) {
+        error.original = original;
+    }
+
+    return error;
+}
+
 class DatabaseService {
     constructor() {
-        this.pool = new Pool({
+        const connectionTimeout = parsePositiveInt(process.env.DB_CONNECTION_TIMEOUT_MS) || DEFAULT_CONNECTION_TIMEOUT_MS;
+        const idleTimeout = parsePositiveInt(process.env.DB_IDLE_TIMEOUT_MS) || DEFAULT_IDLE_TIMEOUT_MS;
+        const statementTimeout = parsePositiveInt(process.env.DB_STATEMENT_TIMEOUT_MS);
+        const queryTimeout = parsePositiveInt(process.env.DB_QUERY_TIMEOUT_MS);
+        const idleInTransactionTimeout = parsePositiveInt(process.env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS);
+
+        const poolConfig = {
             host: process.env.DB_HOST,
             port: process.env.DB_PORT || 5432,
             user: process.env.DB_USER,
             password: process.env.DB_PASSWORD,
             database: process.env.DB_NAME,
             ssl: process.env.DB_SSL === 'true',
-            connectionTimeoutMillis: 10000,
-            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: connectionTimeout,
+            idleTimeoutMillis: idleTimeout,
             max: Number(process.env.DB_MAX_POOL || 10)
-        });
+        };
+
+        if (statementTimeout !== undefined) {
+            poolConfig.statement_timeout = statementTimeout;
+        }
+
+        if (queryTimeout !== undefined) {
+            poolConfig.query_timeout = queryTimeout;
+        }
+
+        if (idleInTransactionTimeout !== undefined) {
+            poolConfig.idle_in_transaction_session_timeout = idleInTransactionTimeout;
+        }
+
+        this.pool = new Pool(poolConfig);
 
         console.log('[DatabaseService] Pool config:', {
             host: process.env.DB_HOST,
             port: process.env.DB_PORT,
             user: process.env.DB_USER,
             database: process.env.DB_NAME,
-            ssl: process.env.DB_SSL
+            ssl: process.env.DB_SSL,
+            connectionTimeoutMillis: connectionTimeout,
+            idleTimeoutMillis: idleTimeout,
+            statementTimeout: statementTimeout,
+            queryTimeout: queryTimeout,
+            idleInTransactionTimeout: idleInTransactionTimeout
         });
 
         this.schema = process.env.DB_SCHEMA || 'public';
@@ -52,6 +110,43 @@ class DatabaseService {
         })();
 
         await this.initPromise;
+    }
+
+    async queryWithTimeout(queryConfig, options = {}) {
+        await this.ensureInitialized();
+
+        const effectiveConfig = typeof queryConfig === 'string' ? { text: queryConfig } : { ...queryConfig };
+        const timeoutMsOption = options.timeoutMs !== undefined ? parsePositiveInt(options.timeoutMs) : undefined;
+        const fallbackTimeout = parsePositiveInt(process.env.DB_API_QUERY_TIMEOUT_MS) || 8000;
+        const timeoutMs = timeoutMsOption || fallbackTimeout;
+        const label = options.label || effectiveConfig.text?.split('\n')[0]?.trim() || 'query';
+
+        let controller = null;
+        let timer = null;
+
+        if (hasAbortController && timeoutMs && timeoutMs > 0) {
+            controller = new AbortController();
+            effectiveConfig.signal = controller.signal;
+            timer = setTimeout(() => controller.abort(), timeoutMs);
+        }
+
+        try {
+            return await this.pool.query(effectiveConfig);
+        } catch (err) {
+            const isAbort = controller && err.name === 'AbortError';
+            const isStatementTimeout = err.code === '57014';
+
+            if (isAbort || isStatementTimeout) {
+                console.warn(`[DatabaseService] Query timeout (${label})`, { timeoutMs, reason: isStatementTimeout ? 'statement_timeout' : 'abort_signal' });
+                throw createDbTimeoutError(label, timeoutMs, err);
+            }
+
+            throw err;
+        } finally {
+            if (timer) {
+                clearTimeout(timer);
+            }
+        }
     }
 
     sanitizePhone(phone) {
@@ -499,22 +594,28 @@ class DatabaseService {
 
         const ids = appointmentIds.map(id => String(id));
 
-        const query = `
-            SELECT DISTINCT ON (appointment_id)
-                appointment_id,
-                status,
-                message_id,
-                type,
-                template_name,
-                error_details,
-                updated_at,
-                created_at
-            FROM ${this.schema}.message_logs
-            WHERE appointment_id = ANY($1)
-            ORDER BY appointment_id, COALESCE(updated_at, created_at) DESC NULLS LAST
-        `;
+        const queryConfig = {
+            text: `
+                SELECT DISTINCT ON (appointment_id)
+                    appointment_id,
+                    status,
+                    message_id,
+                    type,
+                    template_name,
+                    error_details,
+                    updated_at,
+                    created_at
+                FROM ${this.schema}.message_logs
+                WHERE appointment_id = ANY($1)
+                ORDER BY appointment_id, COALESCE(updated_at, created_at) DESC NULLS LAST
+            `,
+            values: [ids]
+        };
 
-        const { rows } = await this.pool.query(query, [ids]);
+        const { rows } = await this.queryWithTimeout(queryConfig, {
+            timeoutMs: parsePositiveInt(process.env.DB_STATUS_QUERY_TIMEOUT_MS),
+            label: 'getLatestStatusesForAppointments'
+        });
         const map = {};
 
         for (const row of rows) {
@@ -627,7 +728,17 @@ class DatabaseService {
             }
         }
 
-        const logMap = await this.getLatestStatusesForAppointments(appointmentIds);
+        let logMap = {};
+        try {
+            logMap = await this.getLatestStatusesForAppointments(appointmentIds);
+        } catch (error) {
+            if (error.code === 'ZEUS_DB_TIMEOUT') {
+                console.warn('[DatabaseService] Timeout while fetching latest statuses; continuing without logs.');
+                logMap = {};
+            } else {
+                throw error;
+            }
+        }
 
         return scheduleRows.map(row => {
             const id = Number(row.schedule_id);
