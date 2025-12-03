@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
 // Forçar que as variáveis do .env sobrescrevam variáveis de ambiente já definidas
 require('dotenv').config({ override: true });
 
@@ -37,7 +38,21 @@ if (!process.env.ADMIN_SESSION_SECRET) {
     console.warn('⚠️  ADMIN_SESSION_SECRET não configurado; usando valor padrão (não recomendado em produção).');
 }
 
-app.use(session({
+let sessionStore = null;
+try {
+    sessionStore = new PgSession({
+        pool: dbService.pool,
+        schemaName: process.env.DB_SCHEMA || 'public',
+        tableName: process.env.ADMIN_SESSION_TABLE || 'zeuschat_sessions',
+        createTableIfMissing: true
+    });
+    console.log('🗄️  Sessões administrativas persistidas no PostgreSQL.');
+} catch (storeError) {
+    sessionStore = null;
+    console.error('⚠️  Falha ao inicializar store de sessão no PostgreSQL; usando MemoryStore temporariamente.', storeError.message);
+}
+
+const sessionOptions = {
     name: 'zeuschat.sid',
     secret: sessionSecret,
     resave: false,
@@ -47,7 +62,13 @@ app.use(session({
         sameSite: 'lax',
         maxAge: Number(process.env.ADMIN_SESSION_MAX_AGE || 1000 * 60 * 60 * 8)
     }
-}));
+};
+
+if (sessionStore) {
+    sessionOptions.store = sessionStore;
+}
+
+app.use(session(sessionOptions));
 app.use('/admin', adminRoutes);
 app.use(express.static('public'));
 // Routes
