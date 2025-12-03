@@ -166,12 +166,23 @@ class ReminderCronService {
                 }
             }
 
-            const appointments = await db.getAppointmentsForReminder({
-                startDate: targetStart,
-                endDate: targetEnd,
-                limit: this.batchSize,
-                requireConfirmed: this.requireConfirmed
-            });
+            let appointments = [];
+            try {
+                appointments = await db.getAppointmentsForReminder({
+                    startDate: targetStart,
+                    endDate: targetEnd,
+                    limit: this.batchSize,
+                    requireConfirmed: this.requireConfirmed
+                });
+            } catch (error) {
+                if (error.code === 'ZEUS_DB_TIMEOUT') {
+                    console.warn('⚠️  ReminderCron sem dados por timeout ao buscar agendamentos.');
+                    summary.error = 'db_timeout_fetch';
+                    summary.failed = 0;
+                    return summary;
+                }
+                throw error;
+            }
 
             summary.attempted = appointments.length;
 

@@ -835,7 +835,15 @@ class DatabaseService {
             LIMIT $3
         `;
 
-        const { rows } = await this.pool.query(query, [...params, Math.max(1, Math.floor(limit))]);
+        const queryConfig = {
+            text: query,
+            values: [...params, Math.max(1, Math.floor(limit))]
+        };
+
+        const { rows } = await this.queryWithTimeout(queryConfig, {
+            timeoutMs: parsePositiveInt(process.env.DB_REMINDER_FETCH_TIMEOUT_MS),
+            label: 'getAppointmentsForReminder'
+        });
         return rows.map(row => this.mapAppointmentRow(row));
     }
 
