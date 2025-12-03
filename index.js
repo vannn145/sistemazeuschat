@@ -4,8 +4,15 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const session = require('express-session');
-const PgSession = require('connect-pg-simple')(session);
+
+let PgSession = null;
+try {
+    PgSession = require('connect-pg-simple')(session);
+} catch (pgStoreError) {
+    console.warn('⚠️  Módulo connect-pg-simple indisponível; armazenamento de sessão em PostgreSQL será ignorado.', pgStoreError.message);
+}
 // Forçar que as variáveis do .env sobrescrevam variáveis de ambiente já definidas
 require('dotenv').config({ override: true });
 
@@ -38,18 +45,50 @@ if (!process.env.ADMIN_SESSION_SECRET) {
     console.warn('⚠️  ADMIN_SESSION_SECRET não configurado; usando valor padrão (não recomendado em produção).');
 }
 
+const storePreference = String(process.env.ADMIN_SESSION_STORE || 'file').toLowerCase();
 let sessionStore = null;
-try {
-    sessionStore = new PgSession({
-        pool: dbService.pool,
-        schemaName: process.env.DB_SCHEMA || 'public',
-        tableName: process.env.ADMIN_SESSION_TABLE || 'zeuschat_sessions',
-        createTableIfMissing: true
-    });
-    console.log('🗄️  Sessões administrativas persistidas no PostgreSQL.');
-} catch (storeError) {
-    sessionStore = null;
-    console.error('⚠️  Falha ao inicializar store de sessão no PostgreSQL; usando MemoryStore temporariamente.', storeError.message);
+let resolvedStore = storePreference;
+
+if (resolvedStore === 'db') {
+    if (!PgSession) {
+        console.warn('⚠️  Store de sessão em PostgreSQL solicitado, mas dependência não está carregada. Recuando para store em arquivo.');
+        resolvedStore = 'file';
+    } else {
+        try {
+            sessionStore = new PgSession({
+                pool: dbService.pool,
+                schemaName: process.env.DB_SCHEMA || 'public',
+                tableName: process.env.ADMIN_SESSION_TABLE || 'zeuschat_sessions',
+                createTableIfMissing: String(process.env.ADMIN_SESSION_CREATE_TABLE || 'false').toLowerCase() === 'true'
+            });
+            console.log('🗄️  Sessões administrativas persistidas no PostgreSQL.');
+        } catch (storeError) {
+            sessionStore = null;
+            resolvedStore = 'file';
+            console.error('⚠️  Falha ao inicializar store de sessão no PostgreSQL; recuando para filesystem.', storeError.message);
+        }
+    }
+}
+
+if (resolvedStore !== 'db') {
+    try {
+        const FileStore = require('session-file-store')(session);
+        const sessionsDir = process.env.ADMIN_SESSION_DIR
+            ? (path.isAbsolute(process.env.ADMIN_SESSION_DIR)
+                ? process.env.ADMIN_SESSION_DIR
+                : path.join(__dirname, process.env.ADMIN_SESSION_DIR))
+            : path.join(__dirname, 'sessions');
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        sessionStore = new FileStore({
+            path: sessionsDir,
+            retries: 1,
+            fileExtension: '.json'
+        });
+        console.log('🗃️  Sessões administrativas persistidas no filesystem:', sessionsDir);
+    } catch (fileStoreError) {
+        sessionStore = null;
+        console.error('⚠️  Falha ao inicializar store de sessão no filesystem; usando MemoryStore temporariamente.', fileStoreError.message);
+    }
 }
 
 const sessionOptions = {
