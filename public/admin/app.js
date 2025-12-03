@@ -113,7 +113,7 @@ function buildStatusBadge(status) {
         className = 'status-retrying';
     } else if (normalized.includes('confirm')) {
         className = 'status-sent';
-    } else if (normalized.includes('cancel')) {
+    } else if (normalized.includes('cancel') || normalized.includes('desmarc')) {
         className = 'status-warning';
     }
     return `<span class="status-badge ${className}">${status || '—'}</span>`;
@@ -148,14 +148,6 @@ function renderLogs(logs, errorMessage = null) {
     }).join('');
 }
 
-function summarizeWebhook(entry) {
-    const metadata = entry?.payload?.entry || entry?.payload?.messages;
-    if (Array.isArray(metadata) && metadata.length > 0) {
-        return JSON.stringify(metadata[0]).slice(0, 120) + '…';
-    }
-    return entry?.payload ? JSON.stringify(entry.payload).slice(0, 120) + '…' : 'Evento recebido';
-}
-
 function renderWebhook(events, errorMessage = null) {
     if (errorMessage) {
         webhookTableBody.innerHTML = `<tr><td colspan="3">Falha ao carregar eventos: ${errorMessage}</td></tr>`;
@@ -166,11 +158,13 @@ function renderWebhook(events, errorMessage = null) {
         return;
     }
     webhookTableBody.innerHTML = events.map((event) => {
+        const timestamp = event.timestamp || event.createdAt;
+        const badge = buildStatusBadge(event.status);
         return `
             <tr>
-                <td>${formatDate(event.createdAt)}</td>
-                <td>${event.type || 'webhook'}</td>
-                <td class="muted">${summarizeWebhook(event)}</td>
+                <td>${formatDate(timestamp)}</td>
+                <td>${event.phone || '—'}</td>
+                <td>${badge}</td>
             </tr>
         `;
     }).join('');
