@@ -146,14 +146,23 @@ class ReminderCronService {
                 : null;
 
             if (lookbackStart) {
-                const recentLogs = await db.getRecentLogsByType({
-                    types: ['reminder'],
-                    limit: this.batchSize,
-                    lookbackMinutes: this.lookbackMinutes
-                });
-                if (Array.isArray(recentLogs) && recentLogs.length >= this.batchSize) {
-                    summary.skipped = recentLogs.length;
-                    summary.reason = 'recent_activity';
+                try {
+                    const recentLogs = await db.getRecentLogsByType({
+                        types: ['reminder'],
+                        limit: this.batchSize,
+                        lookbackMinutes: this.lookbackMinutes
+                    });
+                    if (Array.isArray(recentLogs) && recentLogs.length >= this.batchSize) {
+                        summary.skipped = recentLogs.length;
+                        summary.reason = 'recent_activity';
+                    }
+                } catch (error) {
+                    if (error.code === 'ZEUS_DB_TIMEOUT') {
+                        console.warn('⚠️  ReminderCron ignorou verificação de logs por timeout.');
+                        summary.reason = 'recent_activity_timeout';
+                    } else {
+                        throw error;
+                    }
                 }
             }
 
@@ -191,28 +200,44 @@ class ReminderCronService {
                         { scheduleId: appointment.id }
                     );
 
-                    await db.logOutboundMessage({
-                        appointmentId: appointment.id,
-                        phone,
-                        messageId: result?.messageId || null,
-                        type: 'reminder',
-                        templateName: reminderName,
-                        status: 'sent'
-                    });
+                    try {
+                        await db.logOutboundMessage({
+                            appointmentId: appointment.id,
+                            phone,
+                            messageId: result?.messageId || null,
+                            type: 'reminder',
+                            templateName: reminderName,
+                            status: 'sent'
+                        });
+                    } catch (logError) {
+                        if (logError.code === 'ZEUS_DB_TIMEOUT') {
+                            console.warn('⚠️  ReminderCron não conseguiu registrar envio por timeout.', { appointmentId: appointment.id });
+                        } else {
+                            throw logError;
+                        }
+                    }
 
                     summary.sent++;
                     summary.items.push({ id: appointment.id, success: true, messageId: result?.messageId || null });
                 } catch (err) {
                     const errorDetails = err?.response?.data || err?.message || String(err);
-                    await db.logOutboundMessage({
-                        appointmentId: appointment.id,
-                        phone,
-                        messageId: `reminder-failed-${appointment.id}-${Date.now()}`,
-                        type: 'reminder',
-                        templateName: reminderName,
-                        status: 'failed',
-                        errorDetails
-                    });
+                    try {
+                        await db.logOutboundMessage({
+                            appointmentId: appointment.id,
+                            phone,
+                            messageId: `reminder-failed-${appointment.id}-${Date.now()}`,
+                            type: 'reminder',
+                            templateName: reminderName,
+                            status: 'failed',
+                            errorDetails
+                        });
+                    } catch (logError) {
+                        if (logError.code === 'ZEUS_DB_TIMEOUT') {
+                            console.warn('⚠️  ReminderCron não conseguiu registrar falha por timeout.', { appointmentId: appointment.id });
+                        } else {
+                            console.error('⚠️  ReminderCron erro registrando falha:', logError);
+                        }
+                    }
                     summary.failed++;
                     summary.items.push({ id: appointment.id, success: false, error: errorDetails });
                 }

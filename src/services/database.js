@@ -416,7 +416,11 @@ class DatabaseService {
             LIMIT $${limitIndex}
         `;
 
-        const { rows } = await this.pool.query(query, params);
+        const queryConfig = { text: query, values: params };
+        const { rows } = await this.queryWithTimeout(queryConfig, {
+            timeoutMs: parsePositiveInt(process.env.DB_RECENT_LOG_TIMEOUT_MS),
+            label: 'getRecentLogsByType'
+        });
         return rows || [];
     }
 
@@ -513,7 +517,11 @@ class DatabaseService {
             RETURNING *
         `;
 
-        const { rows } = await this.pool.query(query, params);
+        const queryConfig = { text: query, values: params };
+        const { rows } = await this.queryWithTimeout(queryConfig, {
+            timeoutMs: parsePositiveInt(process.env.DB_LOG_MESSAGE_TIMEOUT_MS),
+            label: 'logOutboundMessage'
+        });
         return rows[0] || null;
     }
 
@@ -705,7 +713,10 @@ class DatabaseService {
             ORDER BY s."when" ASC
         `;
 
-        const { rows: scheduleRows } = await this.pool.query(scheduleQuery, params);
+        const { rows: scheduleRows } = await this.queryWithTimeout({ text: scheduleQuery, values: params }, {
+            timeoutMs: parsePositiveInt(process.env.DB_REMINDER_SCHEDULE_TIMEOUT_MS),
+            label: 'getPendingAppointments.schedule'
+        });
 
         if (!Array.isArray(scheduleRows) || scheduleRows.length === 0) {
             return [];
@@ -719,7 +730,10 @@ class DatabaseService {
             WHERE sv.schedule_id = ANY($1)
         `;
 
-        const { rows: detailRows } = await this.pool.query(detailsQuery, [appointmentIds]);
+        const { rows: detailRows } = await this.queryWithTimeout({ text: detailsQuery, values: [appointmentIds] }, {
+            timeoutMs: parsePositiveInt(process.env.DB_REMINDER_DETAILS_TIMEOUT_MS),
+            label: 'getPendingAppointments.details'
+        });
         const detailMap = {};
         for (const row of detailRows) {
             const mapped = this.mapAppointmentRow(row);
