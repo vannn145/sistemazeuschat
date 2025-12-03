@@ -119,7 +119,11 @@ function buildStatusBadge(status) {
     return `<span class="status-badge ${className}">${status || '—'}</span>`;
 }
 
-function renderLogs(logs) {
+function renderLogs(logs, errorMessage = null) {
+    if (errorMessage) {
+        logsTableBody.innerHTML = `<tr><td colspan="6">Falha ao carregar logs: ${errorMessage}</td></tr>`;
+        return;
+    }
     if (!Array.isArray(logs) || logs.length === 0) {
         logsTableBody.innerHTML = '<tr><td colspan="6">Nenhum registro encontrado.</td></tr>';
         return;
@@ -152,7 +156,11 @@ function summarizeWebhook(entry) {
     return entry?.payload ? JSON.stringify(entry.payload).slice(0, 120) + '…' : 'Evento recebido';
 }
 
-function renderWebhook(events) {
+function renderWebhook(events, errorMessage = null) {
+    if (errorMessage) {
+        webhookTableBody.innerHTML = `<tr><td colspan="3">Falha ao carregar eventos: ${errorMessage}</td></tr>`;
+        return;
+    }
     if (!Array.isArray(events) || events.length === 0) {
         webhookTableBody.innerHTML = '<tr><td colspan="3">Nenhum webhook registrado.</td></tr>';
         return;
@@ -185,20 +193,33 @@ async function loadLogs() {
         params.set('status', status);
     }
     const result = await fetchJSON(`/admin/api/message-logs?${params.toString()}`);
+    if (result?.success === false) {
+        renderLogs([], result?.error || 'Desconhecido');
+        return;
+    }
     renderLogs(result?.data || []);
 }
 
 async function loadWebhooks() {
     const result = await fetchJSON('/admin/api/webhook-events?limit=30');
+    if (result?.success === false) {
+        renderWebhook([], result?.error || 'Desconhecido');
+        return;
+    }
     renderWebhook(result?.data || []);
 }
 
 async function refreshAll() {
-    try {
-        await Promise.all([loadOverview(), loadLogs(), loadWebhooks()]);
-    } catch (err) {
-        console.error('Falha ao atualizar painel:', err);
-    }
+    await loadOverview().catch((err) => {
+        console.error('Falha ao atualizar visão geral:', err);
+    });
+    await loadLogs().catch((err) => {
+        console.error('Falha ao carregar logs:', err);
+        renderLogs([], err?.message || 'Erro desconhecido');
+    });
+    await loadWebhooks().catch((err) => {
+        console.error('Falha ao carregar webhooks:', err);
+    });
     if (autoRefreshTimer) {
         clearTimeout(autoRefreshTimer);
     }

@@ -127,7 +127,8 @@ router.get('/api/message-logs', ensureAuthenticated, async (req, res) => {
         }).slice(0, limit);
         res.json({ success: true, data: filtered });
     } catch (err) {
-        res.status(500).json({ success: false, message: err?.message || String(err) });
+        console.error('[Admin] Falha ao consultar message logs:', err);
+        res.json({ success: false, data: [], error: err?.message || String(err) });
     }
 });
 
