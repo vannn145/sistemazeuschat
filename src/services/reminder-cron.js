@@ -34,6 +34,20 @@ class ReminderCronService {
         this.batchSize = Number(process.env.REMINDER_CRON_BATCH_SIZE || 40);
         this.requireConfirmed = String(process.env.REMINDER_CRON_REQUIRE_CONFIRMED || 'false').toLowerCase() === 'true';
         this.timeZone = process.env.REMINDER_CRON_TIMEZONE || process.env.CRON_TIMEZONE || 'America/Sao_Paulo';
+        this.allowBodyParameters = String(process.env.REMINDER_TEMPLATE_ALLOW_PARAMETERS ?? 'true').toLowerCase() !== 'false';
+        const bodyFieldsEnv = process.env.REMINDER_TEMPLATE_BODY_FIELDS;
+        if (bodyFieldsEnv === '') {
+            this.templateBodyFields = [];
+        } else {
+            const defaults = ['patient_name', 'date', 'time', 'procedure'];
+            const parsed = Array.isArray(bodyFieldsEnv)
+                ? bodyFieldsEnv
+                : (bodyFieldsEnv || '')
+                    .split(',')
+                    .map((piece) => piece.trim())
+                    .filter(Boolean);
+            this.templateBodyFields = parsed.length > 0 ? parsed : defaults;
+        }
         this.timer = null;
         this.running = false;
         this.lastRun = null;
@@ -100,6 +114,10 @@ class ReminderCronService {
         const dateBR = formatClinicDate(when);
         const timeBR = formatClinicTime(when);
 
+        if (!this.allowBodyParameters) {
+            return [];
+        }
+
         return [
             {
                 type: 'body',
@@ -109,6 +127,48 @@ class ReminderCronService {
                     { type: 'text', text: timeBR },
                     { type: 'text', text: procedure }
                 ]
+            }
+        ];
+
+        const valueMap = {
+            patient_name: patientName,
+                if (!this.allowBodyParameters) {
+                    return [];
+                }
+        for (const field of this.templateBodyFields) {
+                const parameters = Array.isArray(this.templateBodyFields) ? [] : [
+                    { type: 'text', text: patientName },
+                    { type: 'text', text: dateBR },
+                    { type: 'text', text: timeBR },
+                    { type: 'text', text: procedure }
+                ];
+
+                if (Array.isArray(this.templateBodyFields)) {
+                    for (const field of this.templateBodyFields) {
+                        const key = String(field || '').toLowerCase();
+                        const fallbackValue = '';
+                        const text = Object.prototype.hasOwnProperty.call(valueMap, key)
+                            ? valueMap[key] ?? fallbackValue
+                            : appointment[key] ?? fallbackValue;
+                        parameters.push({ type: 'text', text: String(text ?? '') });
+                    }
+                }
+            const key = String(field || '').toLowerCase();
+            const fallbackValue = '';
+            const text = Object.prototype.hasOwnProperty.call(valueMap, key)
+                ? valueMap[key] ?? fallbackValue
+                : appointment[key] ?? fallbackValue;
+            parameters.push({ type: 'text', text: String(text ?? '') });
+        }
+
+        if (parameters.length === 0) {
+            return [];
+        }
+
+        return [
+            {
+                type: 'body',
+                parameters
             }
         ];
     }
@@ -124,27 +184,33 @@ class ReminderCronService {
         this.running = true;
         const summary = {
             startedAt: new Date(),
-            attempted: 0,
-            sent: 0,
-            failed: 0,
-            skipped: 0,
-            items: [],
-            targetDate: null
+
+        const valueMap = {
+            patient_name: patientName,
+            patient: patientName,
+            name: patientName,
+            date: dateBR,
+            time: timeBR,
+            procedure: procedure,
+            procedure_term: procedure,
+            locale_date: dateBR,
+            locale_time: timeBR
         };
 
-        try {
-            const reminderName = process.env.REMINDER_TEMPLATE_NAME || 'lembrete_consulta_cdcenter';
-            const reminderLocale = process.env.REMINDER_TEMPLATE_LOCALE || 'pt_BR';
-            const nowZoned = this.toTimeZone(new Date());
-            const todayStart = this.startOfDay(nowZoned);
-            const targetStart = this.addDays(todayStart, this.leadDays);
-            const targetEnd = this.addDays(targetStart, 1);
-            summary.targetDate = targetStart.toISOString().slice(0, 10);
+        if (!this.allowBodyParameters) {
+            return [];
+        }
 
-            const lookbackStart = this.lookbackMinutes && this.lookbackMinutes > 0
-                ? new Date(Date.now() - this.lookbackMinutes * 60000)
-                : null;
-
+        const parameters = [];
+        const fields = Array.isArray(this.templateBodyFields) ? this.templateBodyFields : [];
+        for (const field of fields) {
+            const key = String(field || '').toLowerCase();
+            const fallbackValue = '';
+            const text = Object.prototype.hasOwnProperty.call(valueMap, key)
+                ? valueMap[key] ?? fallbackValue
+                : appointment[key] ?? fallbackValue;
+            parameters.push({ type: 'text', text: String(text ?? '') });
+        }
             if (lookbackStart) {
                 try {
                     const recentLogs = await db.getRecentLogsByType({
