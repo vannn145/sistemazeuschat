@@ -118,47 +118,46 @@ class ReminderCronService {
             return [];
         }
 
-        return [
-            {
-                type: 'body',
-                parameters: [
-                    { type: 'text', text: patientName },
-                    { type: 'text', text: dateBR },
-                    { type: 'text', text: timeBR },
-                    { type: 'text', text: procedure }
-                ]
-            }
-        ];
-
         const valueMap = {
             patient_name: patientName,
-                if (!this.allowBodyParameters) {
-                    return [];
-                }
-        for (const field of this.templateBodyFields) {
-                const parameters = Array.isArray(this.templateBodyFields) ? [] : [
-                    { type: 'text', text: patientName },
-                    { type: 'text', text: dateBR },
-                    { type: 'text', text: timeBR },
-                    { type: 'text', text: procedure }
-                ];
+            patient: patientName,
+            name: patientName,
+            date: dateBR,
+            time: timeBR,
+            procedure,
+            procedure_term: procedure,
+            locale_date: dateBR,
+            locale_time: timeBR
+        };
 
-                if (Array.isArray(this.templateBodyFields)) {
-                    for (const field of this.templateBodyFields) {
-                        const key = String(field || '').toLowerCase();
-                        const fallbackValue = '';
-                        const text = Object.prototype.hasOwnProperty.call(valueMap, key)
-                            ? valueMap[key] ?? fallbackValue
-                            : appointment[key] ?? fallbackValue;
-                        parameters.push({ type: 'text', text: String(text ?? '') });
-                    }
+        const parameters = [];
+        const fields = Array.isArray(this.templateBodyFields) ? this.templateBodyFields : [];
+
+        if (fields.length === 0) {
+            parameters.push(
+                { type: 'text', text: patientName },
+                { type: 'text', text: dateBR },
+                { type: 'text', text: timeBR },
+                { type: 'text', text: procedure }
+            );
+        } else {
+            for (const field of fields) {
+                const key = String(field || '').toLowerCase();
+                if (key === 'default') {
+                    parameters.push(
+                        { type: 'text', text: patientName },
+                        { type: 'text', text: dateBR },
+                        { type: 'text', text: timeBR },
+                        { type: 'text', text: procedure }
+                    );
+                    continue;
                 }
-            const key = String(field || '').toLowerCase();
-            const fallbackValue = '';
-            const text = Object.prototype.hasOwnProperty.call(valueMap, key)
-                ? valueMap[key] ?? fallbackValue
-                : appointment[key] ?? fallbackValue;
-            parameters.push({ type: 'text', text: String(text ?? '') });
+                const fallbackValue = '';
+                const text = Object.prototype.hasOwnProperty.call(valueMap, key)
+                    ? valueMap[key] ?? fallbackValue
+                    : appointment[key] ?? fallbackValue;
+                parameters.push({ type: 'text', text: String(text ?? '') });
+            }
         }
 
         if (parameters.length === 0) {
@@ -184,33 +183,27 @@ class ReminderCronService {
         this.running = true;
         const summary = {
             startedAt: new Date(),
-
-        const valueMap = {
-            patient_name: patientName,
-            patient: patientName,
-            name: patientName,
-            date: dateBR,
-            time: timeBR,
-            procedure: procedure,
-            procedure_term: procedure,
-            locale_date: dateBR,
-            locale_time: timeBR
+            attempted: 0,
+            sent: 0,
+            failed: 0,
+            skipped: 0,
+            items: [],
+            targetDate: null
         };
 
-        if (!this.allowBodyParameters) {
-            return [];
-        }
+        try {
+            const reminderName = process.env.REMINDER_TEMPLATE_NAME || 'lembrete_consulta_cdcenter';
+            const reminderLocale = process.env.REMINDER_TEMPLATE_LOCALE || 'pt_BR';
+            const nowZoned = this.toTimeZone(new Date());
+            const todayStart = this.startOfDay(nowZoned);
+            const targetStart = this.addDays(todayStart, this.leadDays);
+            const targetEnd = this.addDays(targetStart, 1);
+            summary.targetDate = targetStart.toISOString().slice(0, 10);
 
-        const parameters = [];
-        const fields = Array.isArray(this.templateBodyFields) ? this.templateBodyFields : [];
-        for (const field of fields) {
-            const key = String(field || '').toLowerCase();
-            const fallbackValue = '';
-            const text = Object.prototype.hasOwnProperty.call(valueMap, key)
-                ? valueMap[key] ?? fallbackValue
-                : appointment[key] ?? fallbackValue;
-            parameters.push({ type: 'text', text: String(text ?? '') });
-        }
+            const lookbackStart = this.lookbackMinutes && this.lookbackMinutes > 0
+                ? new Date(Date.now() - this.lookbackMinutes * 60000)
+                : null;
+
             if (lookbackStart) {
                 try {
                     const recentLogs = await db.getRecentLogsByType({
