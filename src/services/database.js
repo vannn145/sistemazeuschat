@@ -840,11 +840,82 @@ class DatabaseService {
             values: [...params, Math.max(1, Math.floor(limit))]
         };
 
-        const { rows } = await this.queryWithTimeout(queryConfig, {
-            timeoutMs: parsePositiveInt(process.env.DB_REMINDER_FETCH_TIMEOUT_MS),
-            label: 'getAppointmentsForReminder'
-        });
-        return rows.map(row => this.mapAppointmentRow(row));
+        try {
+            const { rows } = await this.queryWithTimeout(queryConfig, {
+                timeoutMs: parsePositiveInt(process.env.DB_REMINDER_FETCH_TIMEOUT_MS),
+                label: 'getAppointmentsForReminder'
+            });
+            return rows.map(row => this.mapAppointmentRow(row));
+        } catch (error) {
+            if (error.code !== 'ZEUS_DB_TIMEOUT') {
+                throw error;
+            }
+
+            console.warn('[DatabaseService] Consulta principal de lembretes excedeu timeout, aplicando fallback simplificado.');
+
+            const fallbackQuery = `
+                SELECT sv.*, sv.schedule_id AS id, to_timestamp(s."when") AS tratamento_date
+                FROM ${this.schema}.schedule_v sv
+                INNER JOIN ${this.schema}.schedule s ON s.schedule_id = sv.schedule_id
+                WHERE ${conditions.join(' AND ')}
+                ORDER BY s."when" ASC
+                LIMIT $3
+            `;
+
+            const fallbackConfig = {
+                text: fallbackQuery,
+                values: [...params, Math.max(1, Math.floor(limit))]
+            };
+
+            let fallbackRows = [];
+            try {
+                const timeoutMs = parsePositiveInt(process.env.DB_REMINDER_FALLBACK_TIMEOUT_MS) || 10000;
+                const { rows } = await this.queryWithTimeout(fallbackConfig, {
+                    timeoutMs,
+                    label: 'getAppointmentsForReminder.fallback'
+                });
+                fallbackRows = rows;
+            } catch (fallbackError) {
+                console.warn('[DatabaseService] Fallback de lembretes também excedeu timeout.', fallbackError.message);
+                throw error;
+            }
+
+            if (!Array.isArray(fallbackRows) || fallbackRows.length === 0) {
+                return [];
+            }
+
+            const appointmentIds = fallbackRows.map(row => Number(row.schedule_id)).filter(Number.isFinite);
+            if (appointmentIds.length === 0) {
+                return fallbackRows.map(row => this.mapAppointmentRow(row));
+            }
+
+            try {
+                const logQuery = {
+                    text: `
+                        SELECT DISTINCT appointment_id
+                        FROM ${this.schema}.message_logs
+                        WHERE appointment_id = ANY($1)
+                          AND type = 'reminder'
+                          AND status IN ('sent', 'delivered', 'read')
+                    `,
+                    values: [appointmentIds.map(id => String(id))]
+                };
+
+                const { rows: logRows } = await this.queryWithTimeout(logQuery, {
+                    timeoutMs: parsePositiveInt(process.env.DB_REMINDER_LOG_CHECK_TIMEOUT_MS) || 5000,
+                    label: 'getAppointmentsForReminder.logCheck'
+                });
+
+                if (Array.isArray(logRows) && logRows.length > 0) {
+                    const sentSet = new Set(logRows.map(r => Number(r.appointment_id)));
+                    fallbackRows = fallbackRows.filter(row => !sentSet.has(Number(row.schedule_id)));
+                }
+            } catch (logCheckError) {
+                console.warn('[DatabaseService] Falha ao filtrar lembretes já enviados durante fallback:', logCheckError.message);
+            }
+
+            return fallbackRows.map(row => this.mapAppointmentRow(row));
+        }
     }
 
     async getAppointmentById(id) {
