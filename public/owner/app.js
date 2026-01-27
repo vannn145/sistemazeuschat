@@ -192,10 +192,19 @@ function renderMessageLogs(summary) {
         return;
     }
 
-    const templateStats = summary.types?.template || { total: 0, statuses: {} };
-    const delivered = (templateStats.statuses?.delivered || 0) + (templateStats.statuses?.read || 0);
-    const failed = (templateStats.statuses?.failed || 0) + (templateStats.statuses?.error || 0) + (templateStats.statuses?.undelivered || 0);
-    const total = templateStats.total ?? summary.total ?? 0;
+    const typeEntries = Object.values(summary.types || {});
+    const total = Number(summary.total ?? 0);
+    const delivered = typeEntries.reduce((acc, stats) => {
+        const statuses = stats?.statuses || {};
+        return acc + Number(statuses.delivered || 0) + Number(statuses.read || 0);
+    }, 0);
+    const failed = typeEntries.reduce((acc, stats) => {
+        const statuses = stats?.statuses || {};
+        return acc
+            + Number(statuses.failed || 0)
+            + Number(statuses.error || 0)
+            + Number(statuses.undelivered || 0);
+    }, 0);
 
     logTotalEl.textContent = total;
     logDeliveredEl.textContent = delivered;
