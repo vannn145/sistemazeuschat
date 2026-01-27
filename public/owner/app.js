@@ -160,14 +160,20 @@ function setActiveSection(section) {
 
 function renderStats(stats, generatedAt) {
     if (!stats) {
-        statsTotalEl.textContent = '--';
-        statsConfirmedEl.textContent = '--';
-        statsPendingEl.textContent = '--';
+        if (statsTotalEl) statsTotalEl.textContent = '--';
+        if (statsConfirmedEl) statsConfirmedEl.textContent = '--';
+        if (statsPendingEl) statsPendingEl.textContent = '--';
         return;
     }
-    statsTotalEl.textContent = stats.total ?? 0;
-    statsConfirmedEl.textContent = stats.confirmed ?? 0;
-    statsPendingEl.textContent = stats.pending ?? 0;
+    if (statsTotalEl) {
+        statsTotalEl.textContent = stats.total ?? 0;
+    }
+    if (statsConfirmedEl) {
+        statsConfirmedEl.textContent = stats.confirmed ?? 0;
+    }
+    if (statsPendingEl) {
+        statsPendingEl.textContent = stats.pending ?? 0;
+    }
     if (generatedAtEl && generatedAt) {
         const date = new Date(generatedAt);
         generatedAtEl.textContent = `Atualizado em ${date.toLocaleString('pt-BR')}`;
