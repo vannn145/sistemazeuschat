@@ -413,6 +413,17 @@ function renderConversationThreads() {
 
         const titleEl = document.createElement('h5');
         titleEl.textContent = thread.patientName || thread.phoneDisplay || thread.phoneKey || 'Conversa';
+
+        if ((thread.unreadCount && Number(thread.unreadCount) > 0) || thread.needsResponse) {
+            const indicator = document.createElement('span');
+            indicator.className = 'thread-indicator';
+            const unread = Number(thread.unreadCount || 0);
+            if (unread > 0) {
+                indicator.textContent = unread > 9 ? '9+' : String(unread);
+                indicator.classList.add('count');
+            }
+            titleEl.prepend(indicator);
+        }
         button.appendChild(titleEl);
 
         const previewEl = document.createElement('div');
