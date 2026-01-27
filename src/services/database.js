@@ -2193,8 +2193,32 @@ class DatabaseService {
         return summary;
     }
 
-    async getAppointmentStats() {
+    async getAppointmentStats({ startDate = null, endDate = null } = {}) {
         await this.ensureInitialized();
+
+        const conditions = [];
+        const params = [];
+
+        const normalizeDate = (value) => {
+            if (!(value instanceof Date)) {
+                return null;
+            }
+            const time = value.getTime();
+            return Number.isNaN(time) ? null : value;
+        };
+
+        const start = normalizeDate(startDate);
+        const end = normalizeDate(endDate);
+
+        if (start) {
+            params.push(start);
+            conditions.push(`to_timestamp("when") >= $${params.length}`);
+        }
+
+        if (end) {
+            params.push(end);
+            conditions.push(`to_timestamp("when") < $${params.length}`);
+        }
 
         const statsQuery = `
             SELECT
@@ -2202,15 +2226,15 @@ class DatabaseService {
                 COUNT(*) FILTER (WHERE confirmed = false) AS pending,
                 COUNT(*) AS total
             FROM ${this.schema}.schedule_v
-            WHERE to_timestamp("when") >= NOW() - INTERVAL '30 days'
+            ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : `WHERE to_timestamp("when") >= NOW() - INTERVAL '30 days'`}
         `;
 
-        const row = (await this.pool.query(statsQuery)).rows[0];
+        const row = (await this.pool.query(statsQuery, params)).rows[0];
 
         return {
-            total: Number(row.total || 0),
-            confirmed: Number(row.confirmed || 0),
-            pending: Number(row.pending || 0)
+            total: Number(row?.total || 0),
+            confirmed: Number(row?.confirmed || 0),
+            pending: Number(row?.pending || 0)
         };
     }
 

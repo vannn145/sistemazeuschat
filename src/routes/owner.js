@@ -248,7 +248,10 @@ function createOwnerRouter(tenantKey = 'default') {
         };
 
         try {
-            payload.stats = await dbService.getAppointmentStats();
+            payload.stats = await dbService.getAppointmentStats({
+                startDate: todayStart,
+                endDate: tomorrowStart
+            });
         } catch (error) {
             payload.statsError = error?.message || String(error);
         }
