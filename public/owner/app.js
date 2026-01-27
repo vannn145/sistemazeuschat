@@ -193,7 +193,8 @@ function renderMessageLogs(summary) {
     }
 
     const typeEntries = Object.values(summary.types || {});
-    const total = Number(summary.total ?? 0);
+    const aggregatedTotal = typeEntries.reduce((acc, stats) => acc + Number(stats?.total || 0), 0);
+    const total = aggregatedTotal || Number(summary.total ?? 0);
     const delivered = typeEntries.reduce((acc, stats) => {
         const statuses = stats?.statuses || {};
         return acc + Number(statuses.delivered || 0) + Number(statuses.read || 0);

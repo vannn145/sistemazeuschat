@@ -2179,8 +2179,8 @@ class DatabaseService {
         const summary = { total: 0, types: {} };
 
         for (const row of rows) {
-            const type = row.type || 'unknown';
-            const status = row.status || 'unknown';
+            const type = (row.type || 'unknown').toLowerCase();
+            const status = (row.status || 'unknown').toLowerCase();
             const count = Number(row.total || 0);
             summary.total += count;
             if (!summary.types[type]) {
