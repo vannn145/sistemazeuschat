@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zeus Chat · Diretoria</title>
+    <link rel="stylesheet" href="/owner/assets/style.css">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+</head>
+<body class="dashboard">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-logo">⚡</span>
+            <div>
+                <h1>Zeus Chat</h1>
+                <p>Painel da diretoria</p>
+            </div>
+        </div>
+        <div class="top-actions">
+            <span id="display-name" class="user-tag"></span>
+            <button id="logout-button" class="ghost">Sair</button>
+        </div>
+    </header>
+
+    <main class="content">
+        <section id="alerts" class="alerts" hidden>
+            <div class="notice" id="info-box" hidden></div>
+            <div class="error" id="error-box" hidden></div>
+        </section>
+
+        <nav class="section-nav">
+            <button type="button" class="section-tab active" data-section-target="overview">Visão geral</button>
+            <button type="button" class="section-tab" data-section-target="conversations">Conversas</button>
+            <button type="button" class="section-tab" data-section-target="templates">Templates</button>
+        </nav>
+
+        <div class="section-panel" data-section="overview">
+            <section class="cards">
+                <article class="card">
+                    <h2>Total 30 dias</h2>
+                    <p class="value" id="stat-total">--</p>
+                    <small id="generated-at">&nbsp;</small>
+                </article>
+                <article class="card">
+                    <h2>Confirmados</h2>
+                    <p class="value success" id="stat-confirmed">--</p>
+                    <small>Agendamentos confirmados</small>
+                </article>
+                <article class="card">
+                    <h2>Pendentes</h2>
+                    <p class="value warning" id="stat-pending">--</p>
+                    <small>Aguardando resposta</small>
+                </article>
+                <article class="card">
+                    <h2>Envios hoje</h2>
+                    <p class="value" id="log-total">--</p>
+                    <small id="logs-detail">Entregues <span id="log-delivered">--</span> · Falhas <span id="log-failed">--</span></small>
+                </article>
+            </section>
+
+            <section class="panel">
+                <header class="panel-header">
+                    <h3>Detalhe dos envios de hoje</h3>
+                </header>
+                <div class="panel-body">
+                    <div class="progress-card">
+                        <div class="progress-info">
+                            <span>Total</span>
+                            <strong id="log-total-inline">--</strong>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-segment delivered" id="log-progress-delivered"></div>
+                            <div class="progress-segment failed" id="log-progress-failed"></div>
+                        </div>
+                        <div class="progress-legend">
+                            <span><span class="dot delivered"></span>Entregues/Lidas (<span id="log-delivered-inline">--</span>)</span>
+                            <span><span class="dot failed"></span>Falhas (<span id="log-failed-inline">--</span>)</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel">
+                <header class="panel-header">
+                    <h3>Pacientes aguardando contato</h3>
+                </header>
+                <div class="panel-body">
+                    <ul class="pending-list" id="pending-list"></ul>
+                </div>
+            </section>
+        </div>
+
+        <div class="section-panel" data-section="conversations" hidden>
+            <section class="panel conversation-panel">
+                <header class="panel-header">
+                    <h3>Conversas recentes</h3>
+                    <button class="ghost" id="conversation-refresh" type="button">Atualizar</button>
+                </header>
+                <div class="panel-body">
+                    <form id="conversation-search-form" class="conversation-search">
+                        <input type="search" id="conversation-search-input" placeholder="Buscar por nome ou telefone">
+                        <button type="submit" class="ghost">Buscar</button>
+                    </form>
+                    <div class="conversation-layout">
+                        <aside class="conversation-threads">
+                            <div class="conversation-thread-placeholder" id="conversation-thread-placeholder">Carregando conversas...</div>
+                            <div class="conversation-thread-list" id="conversation-thread-list"></div>
+                        </aside>
+                        <section class="conversation-detail">
+                            <div class="conversation-placeholder" id="conversation-placeholder">Selecione uma conversa para visualizar as mensagens.</div>
+                            <div class="conversation-loading" id="conversation-loading" hidden>Carregando mensagens...</div>
+                            <div class="conversation-view" id="conversation-view" hidden>
+                                <header class="conversation-header">
+                                    <div>
+                                        <h4 class="conversation-title" id="conversation-title">&nbsp;</h4>
+                                        <span class="conversation-subtitle" id="conversation-subtitle">&nbsp;</span>
+                                    </div>
+                                    <span class="conversation-session" id="conversation-session-info">&nbsp;</span>
+                                </header>
+                                <div class="conversation-messages" id="conversation-messages"></div>
+                                <form id="conversation-form" class="conversation-reply" hidden>
+                                    <textarea id="conversation-message-input" rows="3" placeholder="Escreva uma resposta para o paciente..."></textarea>
+                                    <div class="conversation-reply-footer">
+                                        <span class="meta" id="conversation-reply-status"></span>
+                                        <button type="submit" class="primary" id="conversation-send-button">Enviar</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div class="section-panel" data-section="templates" hidden>
+            <section class="panel">
+                <header class="panel-header">
+                    <h3>Templates cadastrados</h3>
+                    <span class="meta" id="templates-meta">Carregando templates do WhatsApp Business...</span>
+                </header>
+                <div class="panel-body">
+                    <div class="table-wrapper">
+                        <table class="templates-table">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>Idioma</th>
+                                    <th>Categoria</th>
+                                    <th>Status</th>
+                                    <th>Atualizado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="templates-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel">
+                <header class="panel-header">
+                    <h3>Teste rápido de template</h3>
+                </header>
+                <div class="panel-body">
+                    <form id="test-form" class="form-grid">
+                        <label>
+                            Template
+                            <select id="template-select" required></select>
+                        </label>
+                        <label>
+                            Telefone destino
+                            <input type="tel" id="test-phone" placeholder="5511999999999" required>
+                        </label>
+                        <label>
+                            Idioma (opcional)
+                            <input type="text" id="test-language" value="pt_BR" placeholder="pt_BR">
+                        </label>
+                        <label class="full">
+                            Variáveis separadas por | (opcional)
+                            <textarea id="test-parameters" rows="3" placeholder="Paciente|Data|Hora|Procedimento"></textarea>
+                        </label>
+                        <label>
+                            ID do agendamento (opcional)
+                            <input type="text" id="test-schedule" placeholder="12345">
+                        </label>
+                        <label class="checkbox">
+                            <input type="checkbox" id="test-buttons" checked>
+                            Incluir botões de confirmação e cancelamento
+                        </label>
+                        <div class="form-actions">
+                            <button type="submit" class="primary">Enviar template de teste</button>
+                            <p class="meta" id="test-feedback"></p>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <span>Zeus Chat · Diretoria</span>
+    </footer>
+    <script src="/owner/assets/app.js" type="module"></script>
+</body>
+</html>

@@ -159,6 +159,13 @@ class WhatsAppBusinessService {
             }
         };
 
+        if (String(process.env.LOG_TEMPLATE_PAYLOAD || 'false').toLowerCase() === 'true') {
+            console.log('[TemplatePayload]', JSON.stringify({
+                to: payload.to,
+                template: payload.template
+            }, null, 2));
+        }
+
         try {
             const response = await axios.post(
                 `${this.baseURL}/${this.phoneNumberId}/messages`,
@@ -367,6 +374,59 @@ class WhatsAppBusinessService {
         return results;
     }
 
+    async listTemplates({ limit = 50, status = 'APPROVED', search = null } = {}) {
+        if (!this.accessToken || !this.businessAccountId) {
+            throw new Error('Configuração incompleta: defina WHATSAPP_ACCESS_TOKEN e WHATSAPP_BUSINESS_ACCOUNT_ID');
+        }
+
+        const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 200);
+        const params = { limit: safeLimit };
+
+        if (status && String(status).toLowerCase() !== 'all') {
+            params.status = String(status).toUpperCase();
+        }
+
+        if (search && typeof search === 'string' && search.trim()) {
+            params.name = search.trim();
+        }
+
+        try {
+            const { data } = await axios.get(
+                `${this.baseURL}/${this.businessAccountId}/message_templates`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${this.accessToken}`
+                    },
+                    params,
+                    httpsAgent: this.httpsAgent
+                }
+            );
+
+            const templates = Array.isArray(data?.data) ? data.data.map((tpl) => ({
+                id: tpl.id || null,
+                name: tpl.name || null,
+                language: tpl.language || null,
+                category: tpl.category || null,
+                status: tpl.status || null,
+                quality_score: tpl.quality_score || null,
+                last_updated_time: tpl.last_updated_time || tpl.last_update_time || null,
+                components: Array.isArray(tpl.components) ? tpl.components : []
+            })) : [];
+
+            return {
+                templates,
+                paging: data?.paging || null
+            };
+        } catch (error) {
+            const apiError = error.response?.data?.error;
+            const friendly = new Error(apiError?.message || error.message || 'Falha ao consultar templates');
+            friendly.code = apiError?.code || error.code;
+            friendly.error_subcode = apiError?.error_subcode;
+            friendly.original = error.response?.data || error.message;
+            throw friendly;
+        }
+    }
+
     async getMessageStatus(messageId) {
         try {
             const response = await axios.get(
@@ -430,9 +490,41 @@ class WhatsAppBusinessService {
             });
 
             // Processar mensagens recebidas (confirmações via texto ou botão)
-            messages.forEach(message => {
+            for (const message of messages) {
                 const from = message.from; // número do usuário
                 let intent = null; // 'confirm' | 'cancel' | null
+
+                const preview = this.describeIncomingMessage(message) || null;
+                const messageTimestamp = message.timestamp ? Number(message.timestamp) : null;
+                const receivedAt = (() => {
+                    if (!Number.isFinite(messageTimestamp)) {
+                        return new Date();
+                    }
+                    const ts = messageTimestamp > 1e12 ? messageTimestamp : messageTimestamp * 1000;
+                    const date = new Date(ts);
+                    return Number.isNaN(date.getTime()) ? new Date() : date;
+                })();
+
+                const dbService = require('./database');
+                dbService.logOutboundMessage({
+                    appointmentId: null,
+                    phone: from,
+                    messageId: message.id || null,
+                    type: message.type || 'text',
+                    templateName: null,
+                    status: 'received',
+                    body: preview,
+                    direction: 'inbound',
+                    metadata: {
+                        source: 'webhook',
+                        interactiveType: message.interactive?.type || null,
+                        buttonText: message.button?.text || null,
+                        payload: message.button?.payload || message.interactive?.button_reply?.id || message.interactive?.list_reply?.id || null
+                    },
+                    lastAttemptAt: receivedAt
+                }).catch((logErr) => {
+                    console.log('⚠️  Falha ao registrar mensagem recebida:', logErr.message);
+                });
 
                 if (message.type === 'text') {
                     const text = (message.text?.body || '').toLowerCase().trim();
@@ -465,7 +557,7 @@ class WhatsAppBusinessService {
                     console.log(`⚠️  Pedido de desmarcação de ${from}`);
                     this.processCancellation(from, message.id, message);
                 }
-            });
+            }
 
             // Processar status de entrega
             statuses.forEach(async (status) => {
@@ -570,11 +662,82 @@ class WhatsAppBusinessService {
 
             if (result?.appointmentId && appointmentForMessage) {
                 const { date: dateBR, time: timeBR } = formatClinicDateTime(appointmentForMessage.tratamento_date);
-                const thanks = `✅ Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado.\nQualquer dúvida, estamos à disposição no (34) 99889-95211.`;
-                await this.sendMessage(phoneNumber, thanks);
+                const ackTemplate = process.env.CONFIRMATION_ACK_TEMPLATE_NAME;
+                const ackLocale = process.env.CONFIRMATION_ACK_TEMPLATE_LOCALE || 'pt_BR';
+                const ackPhone = '(34) 99889-5211';
+                const ackText = `Obrigado! Seu agendamento para ${dateBR} às ${timeBR} está confirmado. Qualquer dúvida, estamos à disposição pelo telefone ${ackPhone}.`;
+                let ackDelivered = false;
+
+                if (ackTemplate) {
+                    const ackComponents = [
+                        {
+                            type: 'body',
+                            parameters: [
+                                { type: 'text', text: appointmentForMessage.patient_name || 'Paciente' },
+                                { type: 'text', text: dateBR },
+                                { type: 'text', text: timeBR }
+                            ]
+                        }
+                    ];
+                    try {
+                        await this.sendTemplateMessage(phoneNumber, ackTemplate, ackLocale, ackComponents, {
+                            scheduleId: appointmentForMessage.id,
+                            includeConfirmButtons: false
+                        });
+                        ackDelivered = true;
+                    } catch (ackErr) {
+                        console.warn('⚠️  Falha ao enviar template de agradecimento de confirmação:', ackErr.response?.data || ackErr.message);
+                    }
+                }
+
+                if (!ackDelivered) {
+                    try {
+                        await this.sendMessage(phoneNumber, ackText);
+                        ackDelivered = true;
+                    } catch (textAckError) {
+                        console.warn('⚠️  Falha ao enviar mensagem de agradecimento em texto:', textAckError.response?.data || textAckError.message);
+                    }
+                }
+
+                if (!ackDelivered) {
+                    console.log('ℹ️  Mensagem de agradecimento não enviada; verifique template/contato.');
+                }
+
                 console.log(`🏁 Agendamento ${result.appointmentId} confirmado via webhook por ${phoneNumber}`);
             } else {
-                await this.sendMessage(phoneNumber, '✅ Obrigado! Sua confirmação foi recebida.');
+                const ackTemplate = process.env.CONFIRMATION_ACK_TEMPLATE_NAME;
+                const ackLocale = process.env.CONFIRMATION_ACK_TEMPLATE_LOCALE || 'pt_BR';
+                if (ackTemplate) {
+                    const placeholderComponents = [
+                        {
+                            type: 'body',
+                            parameters: [
+                                { type: 'text', text: 'Paciente' },
+                                { type: 'text', text: 'Data' },
+                                { type: 'text', text: 'Horário' }
+                            ]
+                        }
+                    ];
+                    try {
+                        await this.sendTemplateMessage(phoneNumber, ackTemplate, ackLocale, placeholderComponents, {
+                            scheduleId: null,
+                            includeConfirmButtons: false
+                        });
+                    } catch (ackErr) {
+                        console.warn('⚠️  Falha ao enviar template de agradecimento fallback:', ackErr.response?.data || ackErr.message);
+                    }
+                }
+
+                if (!ackTemplate) {
+                    const ackPhone = '(34) 99889-5211';
+                    const fallbackAck = `Obrigado! Recebemos sua confirmação. Qualquer dúvida, estamos à disposição pelo telefone ${ackPhone}.`;
+                    try {
+                        await this.sendMessage(phoneNumber, fallbackAck);
+                    } catch (textAckError) {
+                        console.warn('⚠️  Falha ao enviar mensagem de agradecimento genérica em texto:', textAckError.response?.data || textAckError.message);
+                    }
+                    console.log('ℹ️  Confirmação sem agendamento associado; enviado agradecimento genérico em texto.');
+                }
                 console.log(`ℹ️ Confirmação via webhook sem match de agendamento para ${phoneNumber}`);
             }
         } catch (error) {
@@ -629,10 +792,32 @@ class WhatsAppBusinessService {
                 }
             }
             // Aqui poderíamos registrar um status de cancelamento ou alertar a equipe.
-            const msg = (appointmentFromHint || apt)
-                ? 'Recebemos seu pedido e removemos seu agendamento. Para reagendar, fale com nossa equipe no (34) 99889-95211.'
-                : 'Recebemos seu pedido. Para reagendar, por favor entre em contato pelo (34) 99889-95211.';
-            await this.sendMessage(phoneNumber, msg);
+            const cancellationAckTemplate = process.env.CANCELLATION_ACK_TEMPLATE_NAME;
+            const cancellationAckLocale = process.env.CANCELLATION_ACK_TEMPLATE_LOCALE || 'pt_BR';
+            if (cancellationAckTemplate) {
+                const owner = appointmentFromHint || apt || null;
+                const treatmentDateTime = owner?.tratamento_date ? formatClinicDateTime(owner.tratamento_date) : null;
+                const components = [
+                    {
+                        type: 'body',
+                        parameters: [
+                            { type: 'text', text: owner?.patient_name || 'Paciente' },
+                            { type: 'text', text: treatmentDateTime?.date || 'Data' },
+                            { type: 'text', text: treatmentDateTime?.time || 'Horário' }
+                        ]
+                    }
+                ];
+                try {
+                    await this.sendTemplateMessage(phoneNumber, cancellationAckTemplate, cancellationAckLocale, components, {
+                        scheduleId: targetAppointmentId || owner?.id || null,
+                        includeConfirmButtons: false
+                    });
+                } catch (ackErr) {
+                    console.warn('⚠️  Falha ao enviar template de confirmação de cancelamento:', ackErr.response?.data || ackErr.message);
+                }
+            } else {
+                console.log('ℹ️  CANCELLATION_ACK_TEMPLATE_NAME não definido; nenhuma mensagem de cancelamento adicional enviada para evitar erro 131047.');
+            }
         } catch (error) {
             console.error('Erro ao processar cancelamento:', error.response?.data || error.message);
         }
@@ -654,6 +839,33 @@ class WhatsAppBusinessService {
             return button?.title || button?.id || list?.title || list?.id || null;
         }
         return null;
+    }
+
+    describeIncomingMessage(message) {
+        if (!message) {
+            return null;
+        }
+        const text = this.extractIncomingText(message);
+        if (text) {
+            return text;
+        }
+        switch (message.type) {
+            case 'image':
+                return '[Imagem recebida]';
+            case 'audio':
+            case 'voice':
+                return '[Mensagem de áudio recebida]';
+            case 'video':
+                return '[Vídeo recebido]';
+            case 'document':
+                return message.document?.filename ? `[Documento: ${message.document.filename}]` : '[Documento recebido]';
+            case 'sticker':
+                return '[Figurinha recebida]';
+            case 'location':
+                return '[Localização compartilhada]';
+            default:
+                return message.type ? `[${message.type}]` : '[Mensagem recebida]';
+        }
     }
 
     extractAppointmentId(message) {
@@ -699,7 +911,7 @@ Você tem um agendamento marcado na CD CENTER UBERABA:
 🔬 *Procedimento:* ${appointment.main_procedure_term}
 
 Para confirmar seu agendamento, responda *SIM*.
-    Para reagendar, entre em contato: (34) 99889-95211
+    Para reagendar, entre em contato: (34) 99889-5211
 
 _Esta é uma mensagem automática do sistema de agendamentos._`;
     }
@@ -708,7 +920,7 @@ _Esta é uma mensagem automática do sistema de agendamentos._`;
         return {
             isConfigured: !!(this.accessToken && this.phoneNumberId),
             hasApiAccess: true,
-            phoneNumber: '+55 34 99889-95211'
+            phoneNumber: '+55 34 99889-5211'
         };
     }
 }

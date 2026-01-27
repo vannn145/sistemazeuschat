@@ -122,6 +122,34 @@
                 </table>
             </div>
         </section>
+
+        <section class="panel chat-panel">
+            <header class="panel-header">
+                <h3>Conversas WhatsApp</h3>
+                <div class="panel-actions">
+                    <input type="search" id="conversationSearch" placeholder="Buscar paciente ou telefone">
+                    <button id="conversationRefreshButton" class="ghost">Atualizar</button>
+                </div>
+            </header>
+            <div class="chat-layout">
+                <aside class="chat-threads" id="conversationList">
+                    <div class="chat-empty">Carregando conversas...</div>
+                </aside>
+                <div class="chat-detail">
+                    <div class="chat-header">
+                        <div class="chat-title" id="conversationTitle">Selecione uma conversa</div>
+                        <div class="chat-session-info" id="conversationSessionInfo"></div>
+                    </div>
+                    <div class="chat-messages" id="conversationMessages">
+                        <div class="chat-placeholder">Escolha uma conversa à esquerda para visualizar as mensagens.</div>
+                    </div>
+                    <form class="chat-input disabled" id="conversationForm">
+                        <textarea id="conversationInput" rows="2" placeholder="Digite uma resposta" disabled></textarea>
+                        <button type="submit" id="conversationSendButton" disabled>Enviar</button>
+                    </form>
+                </div>
+            </div>
+        </section>
     </main>
 
     <footer class="footer">

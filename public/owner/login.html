@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Painel da Diretoria - Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/owner/assets/style.css">
+</head>
+<body class="login-body">
+    <div class="login-shell">
+        <div class="login-card">
+            <div class="login-header">
+                <span class="login-chip" id="tenant-badge">Diretoria</span>
+                <h1 id="login-title">Painel da Diretoria</h1>
+                <p class="meta" id="login-hint">Informe as credenciais enviadas pela equipe técnica.</p>
+            </div>
+            <div class="error" id="login-error" hidden></div>
+            <form id="login-form" class="login-form">
+                <label for="username">Usuário</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+
+                <label for="password">Senha</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+
+                <button type="submit" class="primary full">Acessar painel</button>
+            </form>
+            <p class="login-footnote" id="login-footnote">Precisa de acesso? Contate o suporte.</p>
+        </div>
+        <aside class="login-side" id="login-side">
+            <div class="login-side-content">
+                <h2 id="side-title">Operação em Tempo Real</h2>
+                <p id="side-text">Centralize a visão de confirmações, templates e indicadores em um só painel.</p>
+                <ul class="login-list">
+                    <li>Confirmações monitoradas ao vivo</li>
+                    <li>Disparos e templates corporativos</li>
+                    <li>Indicadores para tomada de decisão</li>
+                </ul>
+            </div>
+        </aside>
+    </div>
+    <script src="/owner/assets/login.js" type="module"></script>
+</body>
+</html>

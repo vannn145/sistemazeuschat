@@ -163,7 +163,17 @@ class CronService {
 
           const result = await waba.sendTemplateMessage(phone, templateName, locale, components, { scheduleId: a.id });
           if (result?.messageId) {
-            await db.logOutboundMessage({ appointmentId: a.id, phone, messageId: result.messageId, type: 'template', templateName, status: 'sent' });
+            await db.logOutboundMessage({
+              appointmentId: a.id,
+              phone,
+              messageId: result.messageId,
+              type: 'template',
+              templateName,
+              status: 'sent',
+              body: `[TEMPLATE] ${templateName}`,
+              direction: 'outbound_template_cron',
+              metadata: { origin: 'cron_primary', components }
+            });
           }
           summary.sent++;
           summary.items.push({ id: a.id, success: true, phone, messageId: result?.messageId || null });
@@ -185,6 +195,9 @@ class CronService {
               type: 'template',
               templateName,
               status: 'failed',
+              body: `[TEMPLATE] ${templateName}`,
+              direction: 'outbound_template_cron',
+              metadata: { origin: 'cron_primary', components },
               errorDetails: details,
               retryCount: 0,
               nextRetryAt: null,

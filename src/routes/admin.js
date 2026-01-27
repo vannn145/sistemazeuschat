@@ -6,6 +6,7 @@ const cronService = require('../services/cron');
 const retryCronService = require('../services/retry-cron');
 const reminderCronService = require('../services/reminder-cron');
 const activityLog = require('../services/activity-log');
+const whatsappService = require('../services/whatsapp-hybrid');
 
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || '';
@@ -16,6 +17,10 @@ const LOGIN_HTML = path.join(ADMIN_UI_DIR, 'login.html');
 
 const CONFIRM_KEYWORDS = ['confirm', 'sim', 'ok', 'certo', 'confirmado', 'confirmar', 'ack'];
 const CANCEL_KEYWORDS = ['cancel', 'desmarc', 'nao', 'não', 'cancelar', 'desmarcar'];
+
+function normalizePhoneKey(raw) {
+    return String(raw || '').replace(/\D/g, '');
+}
 
 function ensureAuthenticated(req, res, next) {
     if (req?.session?.isAdmin) {
@@ -244,6 +249,144 @@ router.get('/api/webhook-events', ensureAuthenticated, (req, res) => {
     } catch (err) {
         console.error('[Admin] Falha ao carregar eventos de webhook:', err);
         res.json({ success: false, data: [], error: err?.message || String(err) });
+    }
+});
+
+router.get('/api/conversations', ensureAuthenticated, async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit, 10);
+        const lookbackHours = parseInt(req.query.lookbackHours, 10);
+        const data = await dbService.listConversationThreads({
+            limit: Number.isFinite(limit) ? limit : undefined,
+            search: req.query.search || null,
+            lookbackHours: Number.isFinite(lookbackHours) ? lookbackHours : undefined
+        });
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err?.message || String(err) });
+    }
+});
+
+router.get('/api/conversations/:phone/messages', ensureAuthenticated, async (req, res) => {
+    try {
+        const phoneKey = normalizePhoneKey(req.params.phone);
+        if (!phoneKey) {
+            return res.status(400).json({ success: false, message: 'Identificador de conversa inválido' });
+        }
+        const limit = parseInt(req.query.limit, 10);
+        const beforeRaw = req.query.before || null;
+        let before = null;
+        if (beforeRaw) {
+            const parsed = new Date(beforeRaw);
+            if (!Number.isNaN(parsed.getTime())) {
+                before = parsed;
+            }
+        }
+        const [messages, session] = await Promise.all([
+            dbService.getConversationMessages(phoneKey, {
+                limit: Number.isFinite(limit) ? limit : undefined,
+                before
+            }),
+            dbService.getConversationSession(phoneKey)
+        ]);
+        res.json({ success: true, data: { phoneKey, messages, session } });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err?.message || String(err) });
+    }
+});
+
+router.get('/api/conversations/:phone/session', ensureAuthenticated, async (req, res) => {
+    try {
+        const phoneKey = normalizePhoneKey(req.params.phone);
+        if (!phoneKey) {
+            return res.status(400).json({ success: false, message: 'Identificador de conversa inválido' });
+        }
+        const session = await dbService.getConversationSession(phoneKey);
+        res.json({ success: true, data: session });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err?.message || String(err) });
+    }
+});
+
+router.post('/api/conversations/:phone/send', ensureAuthenticated, async (req, res) => {
+    try {
+        const phoneKey = normalizePhoneKey(req.params.phone);
+        if (!phoneKey) {
+            return res.status(400).json({ success: false, message: 'Identificador de conversa inválido' });
+        }
+
+        const messageText = (req.body?.message || '').trim();
+        if (!messageText) {
+            return res.status(400).json({ success: false, message: 'Mensagem vazia' });
+        }
+
+        const status = whatsappService.getStatus();
+        const session = await dbService.getConversationSession(phoneKey);
+        const now = Date.now();
+        const lastInbound = session.lastInboundAt ? session.lastInboundAt.getTime() : null;
+        const inboundAgeMs = lastInbound ? now - lastInbound : null;
+        const hasOpenWindow = inboundAgeMs !== null && inboundAgeMs <= 24 * 60 * 60 * 1000;
+
+        if (status.mode === 'business' && !hasOpenWindow) {
+            return res.status(409).json({
+                success: false,
+                code: 'session_expired',
+                message: 'A janela de 24 horas expirou. Envie um template aprovado antes de responder manualmente.',
+                session
+            });
+        }
+
+        const phoneE164 = dbService.formatE164(phoneKey) || `+${phoneKey}`;
+        if (!phoneE164 || phoneE164.length < 8) {
+            return res.status(400).json({ success: false, message: 'Telefone inválido para envio' });
+        }
+
+        let appointment = null;
+        try {
+            appointment = await dbService.getLatestPendingAppointmentByPhone(phoneKey);
+            if (!appointment) {
+                appointment = await dbService.getLatestAppointmentFromLogsByPhone(phoneKey);
+            }
+        } catch (lookupErr) {
+            console.log('⚠️  Falha ao localizar agendamento da conversa:', lookupErr.message);
+        }
+
+        const sendResult = await whatsappService.sendMessage(phoneE164, messageText);
+        if (sendResult?.messageId) {
+            try {
+                await dbService.logOutboundMessage({
+                    appointmentId: appointment?.id || null,
+                    phone: phoneE164,
+                    messageId: sendResult.messageId,
+                    type: 'text',
+                    templateName: null,
+                    status: 'sent',
+                    body: messageText,
+                    direction: 'outbound_admin',
+                    metadata: {
+                        origin: 'admin_panel_reply',
+                        phoneKey,
+                        appointmentId: appointment?.id || null,
+                        sessionWindowActive: hasOpenWindow,
+                        mode: status.mode
+                    }
+                });
+            } catch (logErr) {
+                console.log('⚠️  Falha ao registrar envio manual:', logErr.message);
+            }
+        }
+
+        const updatedSession = await dbService.getConversationSession(phoneKey);
+        res.json({
+            success: true,
+            data: {
+                messageId: sendResult?.messageId || null,
+                appointmentId: appointment?.id || null,
+                session: updatedSession
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err?.message || String(err) });
     }
 });
 

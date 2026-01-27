@@ -467,7 +467,17 @@ router.post('/send/:id', async (req, res) => {
         // Log envio (se retornou messageId)
         try {
             if (result?.messageId) {
-                    await dbService.logOutboundMessage({ appointmentId: Number(id), phone, messageId: result.messageId, type: 'text', templateName: null, status: 'sent' });
+                await dbService.logOutboundMessage({
+                    appointmentId: Number(id),
+                    phone,
+                    messageId: result.messageId,
+                    type: 'text',
+                    templateName: null,
+                    status: 'sent',
+                    body: message,
+                    direction: 'outbound_manual',
+                    metadata: { origin: 'admin_send_single' }
+                });
             }
         } catch (_) {}
 
@@ -594,7 +604,17 @@ router.post('/send/bulk', async (req, res) => {
         try {
             for (const r of results) {
                 if (r.success && r.messageId) {
-                    await dbService.logOutboundMessage({ appointmentId: r.id, phone: r.phone, messageId: r.messageId, type: 'text', templateName: null, status: 'sent' });
+                    await dbService.logOutboundMessage({
+                        appointmentId: r.id,
+                        phone: r.phone,
+                        messageId: r.messageId,
+                        type: 'text',
+                        templateName: null,
+                        status: 'sent',
+                        body: r.message,
+                        direction: 'outbound_bulk',
+                        metadata: { origin: 'admin_bulk_send' }
+                    });
                 }
             }
         } catch (_) {}
@@ -792,11 +812,17 @@ router.post('/send/confirm-template-by-name', async (req, res) => {
         const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components, { scheduleId: appointment.id });
         try {
             if (result?.messageId) {
-                if (appointment && typeof appointment.id === 'number' && result?.messageId) {
-                    if (appointment && typeof appointment.id === 'number' && result?.messageId) {
-                        await dbService.logOutboundMessage({ appointmentId: appointment.id, phone, messageId: result.messageId, type: 'template', templateName: name, status: 'sent' });
-                    }
-                }
+                await dbService.logOutboundMessage({
+                    appointmentId: appointment.id,
+                    phone,
+                    messageId: result.messageId,
+                    type: 'template',
+                    templateName: name,
+                    status: 'sent',
+                    body: `[TEMPLATE] ${name}`,
+                    direction: 'outbound_template',
+                    metadata: { origin: 'admin_send_template_by_name', components }
+                });
             }
         } catch (_) {}
         return res.json({ success: true, data: { patientName, phone, appointment, components, result } });
@@ -843,7 +869,17 @@ router.post('/send/confirm-template/:id', async (req, res) => {
         const result = await whatsappBusiness.sendTemplateMessage(phone, name, 'pt_BR', components, { scheduleId: appointment.id });
         try {
             if (result?.messageId) {
-                await dbService.logOutboundMessage({ appointmentId: appointment.id, phone, messageId: result.messageId, type: 'template', templateName: name, status: 'sent' });
+                await dbService.logOutboundMessage({
+                    appointmentId: appointment.id,
+                    phone,
+                    messageId: result.messageId,
+                    type: 'template',
+                    templateName: name,
+                    status: 'sent',
+                    body: `[TEMPLATE] ${name}`,
+                    direction: 'outbound_template',
+                    metadata: { origin: 'admin_send_template_by_id', components }
+                });
             }
         } catch (_) {}
         return res.json({ success: true, data: { appointment, phone, components, result } });
@@ -908,7 +944,17 @@ router.post('/send/bulk-template', async (req, res) => {
                 results.push({ id, success: true, messageId: result.messageId, phone, appointment });
                 if (result?.messageId) {
                     try {
-                        await dbService.logOutboundMessage({ appointmentId: appointment.id, phone, messageId: result.messageId, type: 'template', templateName: name, status: 'sent' });
+                        await dbService.logOutboundMessage({
+                            appointmentId: appointment.id,
+                            phone,
+                            messageId: result.messageId,
+                            type: 'template',
+                            templateName: name,
+                            status: 'sent',
+                            body: `[TEMPLATE] ${name}`,
+                            direction: 'outbound_bulk_template',
+                            metadata: { origin: 'admin_bulk_template', components }
+                        });
                     } catch (_) {}
                 }
 

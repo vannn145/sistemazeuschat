@@ -14,11 +14,27 @@ async function main() {
     process.exit(1);
   }
   const url = `https://graph.facebook.com/${apiVersion}/${phoneId}/messages`;
+  const bodyParams = (process.argv[5] || '').split('|');
+  const components = [
+    {
+      type: 'body',
+      parameters: bodyParams
+        .filter(Boolean)
+        .map(text => ({ type: 'text', text }))
+    }
+  ];
+  if (components[0].parameters.length === 0) {
+    components.length = 0;
+  }
   const payload = {
     messaging_product: 'whatsapp',
     to,
     type: 'template',
-    template: { name: templateName, language: { code: languageCode } }
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components: components.length ? components : undefined
+    }
   };
   try {
     const { data } = await axios.post(url, payload, {

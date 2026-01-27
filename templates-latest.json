@@ -1,0 +1,272 @@
+[dotenv@17.2.3] injecting env (58) from .env -- tip: ⚙️  load multiple .env files with { path: ['.env.local', '.env'] }
+{
+  "data": [
+    {
+      "name": "agradecimento_cancelamento_cdcenter",
+      "previous_category": "UTILITY",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "HEADER",
+          "format": "TEXT",
+          "text": "Consulta Cancelada/ Desmarcada"
+        },
+        {
+          "type": "BODY",
+          "text": "Consulta desmarcada, Obrigado!"
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "MARKETING",
+      "sub_category": "CUSTOM",
+      "id": "2277090476111314"
+    },
+    {
+      "name": "agradecimento_confirmacao_cdcenter",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Obrigado, consulta confirmada!"
+        }
+      ],
+      "language": "en",
+      "status": "APPROVED",
+      "category": "UTILITY",
+      "id": "1703543793939155"
+    },
+    {
+      "name": "lembrete_consulta_cdcenter",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Olá, {{1}}! Somos da CD Center Uberaba.\n\n*Lembramos que sua consulta está marcada para {{2}} às {{3}}.\nProcedimento: {{4}}.*\n\nCaso precise remarcar, por favor entre em contato conosco pelo telefone:  📌 *(34) 99889-5211*  .",
+          "example": {
+            "body_text": [
+              [
+                "MARIANA MORLIM DE CARVALHO",
+                "05/12/2025",
+                "10:00",
+                "ECODOPPLERCARDIOGRAMA TRANSTORÁCICO"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Confirmado"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Desmarcar"
+            }
+          ]
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "MARKETING",
+      "id": "1340143884084889"
+    },
+    {
+      "name": "confirmacao_utilidade_cdcenter",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "HEADER",
+          "format": "TEXT",
+          "text": "Confirmação de Agendamento"
+        },
+        {
+          "type": "BODY",
+          "text": "Olá, {{1}}. Seu atendimento está agendado no CD Center Uberaba para {{2}} às {{3}}. Procedimento: {{4}}. Confirme ou cancele pelo botão.\nTelefone: (34) 99889-5211",
+          "example": {
+            "body_text": [
+              [
+                "MARIANA MORLIM DE CARVALHO",
+                "05/11/2025",
+                "10:00",
+                "ECODOPPLERCARDIOGRAMA TRANSTORÁCICO"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Confirmar"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Desmarcar"
+            }
+          ]
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "UTILITY",
+      "id": "1853901881936956"
+    },
+    {
+      "name": "confirmacao_personalizada",
+      "previous_category": "UTILITY",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "HEADER",
+          "format": "TEXT",
+          "text": "Confirmação de agendamento"
+        },
+        {
+          "type": "BODY",
+          "text": "Olá nós somos *CD CENTER UBERABA*, {{1}}!\nVocê possui um agendamento  para {{2}} às {{3}} (procedimento: {{4}}).\nPodemos confirmar sua presença?",
+          "example": {
+            "body_text": [
+              [
+                "MARIANA MORLIM DE CARVALHO",
+                "05/11/2025",
+                "10:00",
+                "ECODOPPLERCARDIOGRAMA TRANSTORÁCICO"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "FOOTER",
+          "text": "Confirme sua consulta/procedimento nos botões abaixo"
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Confirmado"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Desmarcar"
+            }
+          ]
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "MARKETING",
+      "correct_category": "MARKETING",
+      "id": "1520690819141652"
+    },
+    {
+      "name": "desmarcado",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Agendamento cancelado, para reagendar contate-nos pelo(s) telefone(s) ."
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "PHONE_NUMBER",
+              "text": "CD CENTER UBERABA",
+              "phone_number": "+5534998895211"
+            }
+          ]
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "MARKETING",
+      "id": "1356167776025686"
+    },
+    {
+      "name": "obrigado",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Obrigado  por confirmar, aguardamos você na data e horário agendado."
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "MARKETING",
+      "sub_category": "CUSTOM",
+      "id": "665850616367927"
+    },
+    {
+      "name": "confirmao_de_agendamento",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "HEADER",
+          "format": "TEXT",
+          "text": "Confirmação de agendamento"
+        },
+        {
+          "type": "BODY",
+          "text": "Olá,  Você possui  agendamento(s) consulta / procedimento  a serem realizados no estabelecimento de saúde CD Center - Uberaba. Podemos confirmar sua presença?"
+        },
+        {
+          "type": "FOOTER",
+          "text": "Confirme sua consulta/procedimento nos botões abaixo"
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Confirmado"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Desmarcar"
+            }
+          ]
+        }
+      ],
+      "language": "pt_BR",
+      "status": "APPROVED",
+      "category": "UTILITY",
+      "sub_category": "CUSTOM",
+      "id": "1258395809385345"
+    },
+    {
+      "name": "hello_world",
+      "parameter_format": "POSITIONAL",
+      "components": [
+        {
+          "type": "HEADER",
+          "format": "TEXT",
+          "text": "Hello World"
+        },
+        {
+          "type": "BODY",
+          "text": "Welcome and congratulations!! This message demonstrates your ability to send a WhatsApp message notification from the Cloud API, hosted by Meta. Thank you for taking the time to test with us."
+        },
+        {
+          "type": "FOOTER",
+          "text": "WhatsApp Business Platform sample message"
+        }
+      ],
+      "language": "en_US",
+      "status": "APPROVED",
+      "category": "UTILITY",
+      "id": "4273844416193864"
+    }
+  ],
+  "paging": {
+    "cursors": {
+      "before": "QVFIU3U0TGV4TlNjMkNpU2t6ME5KWmNfSVlibHJ1WV94NUlZATHpKbkY0QTFfN3FHWFZAkVktwV1hPd1pRU1IzeHM3UktkbU5rZAnFMdXpfSGRfMVY5amtRMGln",
+      "after": "QVFIU1h1Q3RNbzZAfUm4zUU5mSGZANWi01dXloUU1TUFZAzUGxKWlJUZA3dqSG5jNmxZAdWhiNG53Wm9OUDd5X2RUdnl3aFd0YTdSc1I2OVZA6QkgxSy02ODVJQXpR"
+    }
+  }
+}

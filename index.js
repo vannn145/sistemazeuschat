@@ -23,15 +23,18 @@ const retryCronService = require('./src/services/retry-cron');
 const reminderCronService = require('./src/services/reminder-cron');
 const messageRoutes = require('./src/routes/messages');
 const adminRoutes = require('./src/routes/admin');
+const { createOwnerRouter } = require('./src/routes/owner');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const ADMIN_ASSETS_DIR = path.join(__dirname, 'public', 'admin');
+const OWNER_ASSETS_DIR = path.join(__dirname, 'public', 'owner');
 
 // Middleware
 app.use(cors());
 app.use('/admin/assets', express.static(ADMIN_ASSETS_DIR));
+app.use('/owner/assets', express.static(OWNER_ASSETS_DIR));
 app.use(express.json({
     limit: process.env.BODY_LIMIT || '2mb',
     verify: (req, res, buf) => {
@@ -109,6 +112,12 @@ if (sessionStore) {
 
 app.use(session(sessionOptions));
 app.use('/admin', adminRoutes);
+
+const ownerRouter = createOwnerRouter('default');
+const haertelRouter = createOwnerRouter('haertel');
+
+app.use('/owner/haertel', haertelRouter);
+app.use('/owner', ownerRouter);
 app.use(express.static('public'));
 // Routes
 app.use('/api/messages', messageRoutes);

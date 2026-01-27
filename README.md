@@ -304,6 +304,24 @@ ADMIN_SESSION_MAX_AGE=28800000   # (opcional) tempo da sessão em ms
 
 Os dados apresentados são alimentados pela tabela `message_logs` e pelo arquivo `logs/webhook-events.json`. Para limpar o histórico dos webhooks basta remover esse arquivo (o serviço recria automaticamente).
 
+## 🧾 Painel da Diretoria (Owner)
+
+Interface simplificada para os sócios acompanharem os principais indicadores e testarem templates aprovados.
+
+- **URL:** `https://seu-servidor/owner`
+- **Recursos:** estatísticas dos últimos 30 dias, envios do dia, fila de pacientes aguardando disparo, lista de templates e teste rápido.
+- **Login:** definido via variáveis dedicadas no `.env`.
+
+Variáveis obrigatórias:
+
+```
+OWNER_USER=owner                 # Usuário do painel
+OWNER_PASS=defina_uma_senha      # Senha obrigatória
+OWNER_DISPLAY_NAME=Diretoria     # (opcional) Nome exibido no topo
+```
+
+Para habilitar testes com templates é necessário operar no modo Cloud API (`WHATSAPP_MODE=business`) com token válido.
+
 ## 🤝 Suporte
 
 Para suporte técnico:

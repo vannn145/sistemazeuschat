@@ -52,6 +52,20 @@ class WhatsAppHybridService {
         return await this.activeService.sendBulkMessages(recipients);
     }
 
+    async sendTemplateMessage(...args) {
+        if (this.mode !== 'business' || typeof this.activeService?.sendTemplateMessage !== 'function') {
+            throw new Error('Envio de template disponível apenas no modo WhatsApp Business');
+        }
+        return this.activeService.sendTemplateMessage(...args);
+    }
+
+    async listTemplates(options = {}) {
+        if (this.mode !== 'business' || typeof this.activeService?.listTemplates !== 'function') {
+            throw new Error('Listagem de templates disponível apenas no modo WhatsApp Business');
+        }
+        return this.activeService.listTemplates(options);
+    }
+
     generateMessage(appointment) {
         return this.activeService.generateMessage(appointment);
     }

@@ -238,6 +238,103 @@ class DatabaseService {
         return mapped;
     }
 
+    async fetchAppointmentDetailsByIds(appointmentIds = []) {
+        await this.ensureInitialized();
+
+        if (!Array.isArray(appointmentIds) || appointmentIds.length === 0) {
+            return new Map();
+        }
+
+        const numericIds = Array.from(
+            new Set(
+                appointmentIds
+                    .map((value) => Number(value))
+                    .filter((value) => Number.isFinite(value) && value > 0)
+            )
+        );
+
+        if (numericIds.length === 0) {
+            return new Map();
+        }
+
+        const { rows } = await this.pool.query(
+            `
+                SELECT
+                    schedule_id,
+                    patient_name,
+                    main_procedure_term,
+                    patient_contacts
+                FROM ${this.schema}.schedule_v
+                WHERE schedule_id = ANY($1)
+            `,
+            [numericIds]
+        );
+
+        const map = new Map();
+        for (const row of rows) {
+            const scheduleId = Number(row.schedule_id);
+            map.set(scheduleId, {
+                scheduleId,
+                patientName: row.patient_name || null,
+                mainProcedureTerm: row.main_procedure_term || null,
+                patientContacts: row.patient_contacts || null
+            });
+        }
+
+        return map;
+    }
+
+    async fetchLatestScheduleByPhoneDigits(phoneDigitsList = []) {
+        await this.ensureInitialized();
+
+        if (!Array.isArray(phoneDigitsList) || phoneDigitsList.length === 0) {
+            return new Map();
+        }
+
+        const cleanList = Array.from(new Set(phoneDigitsList.filter(Boolean)));
+        if (cleanList.length === 0) {
+            return new Map();
+        }
+
+        const { rows } = await this.pool.query(
+            `
+                SELECT DISTINCT ON (clean_phone)
+                    clean_phone,
+                    schedule_id,
+                    patient_name,
+                    main_procedure_term,
+                    patient_contacts,
+                    to_timestamp("when") AS when_ts
+                FROM (
+                    SELECT
+                        regexp_replace(COALESCE(patient_contacts, ''), '[^0-9]', '', 'g') AS clean_phone,
+                        schedule_id,
+                        patient_name,
+                        main_procedure_term,
+                        patient_contacts,
+                        "when"
+                    FROM ${this.schema}.schedule_v
+                    WHERE regexp_replace(COALESCE(patient_contacts, ''), '[^0-9]', '', 'g') = ANY($1)
+                ) data
+                WHERE clean_phone IS NOT NULL AND clean_phone <> ''
+                ORDER BY clean_phone, when_ts DESC
+            `,
+            [cleanList]
+        );
+
+        const map = new Map();
+        for (const row of rows) {
+            map.set(row.clean_phone, {
+                scheduleId: row.schedule_id ? Number(row.schedule_id) : null,
+                patientName: row.patient_name || null,
+                mainProcedureTerm: row.main_procedure_term || null,
+                patientContacts: row.patient_contacts || null
+            });
+        }
+
+        return map;
+    }
+
     async updateLatestLogStatus(appointmentId, status, executor = null) {
         if (!appointmentId || !status) {
             return;
@@ -286,6 +383,11 @@ class DatabaseService {
         await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0`);
         await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ`);
         await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS phone_digits TEXT`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS body TEXT`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS direction TEXT`);
+        await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS metadata JSONB`);
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_phone_digits ON ${this.schema}.message_logs (phone_digits)`);
     }
 
     normalizeErrorDetails(details) {
@@ -302,27 +404,137 @@ class DatabaseService {
         }
     }
 
-    async logOutboundMessage({ appointmentId, phone, messageId, type, templateName, status, errorDetails = null, retryCount = 0, nextRetryAt = null, lastAttemptAt = null }) {
+    normalizeMessageBody(body) {
+        if (body === undefined || body === null) {
+            return null;
+        }
+
+        if (typeof body === 'string') {
+            const trimmed = body.trim();
+            return trimmed ? trimmed.slice(0, 2000) : null;
+        }
+
+        try {
+            const serialized = JSON.stringify(body);
+            return serialized ? serialized.slice(0, 2000) : null;
+        } catch (_) {
+            return String(body).slice(0, 2000);
+        }
+    }
+
+    normalizeDirection(direction, fallback = 'outbound') {
+        if (!direction && direction !== '') {
+            return fallback;
+        }
+
+        const normalized = String(direction)
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '_')
+            .slice(0, 64);
+
+        if (!normalized) {
+            return fallback;
+        }
+
+        const allowed = new Set([
+            'inbound',
+            'outbound',
+            'outbound_template',
+            'outbound_template_cron',
+            'outbound_manual',
+            'outbound_bulk',
+            'outbound_bulk_template',
+            'outbound_resend',
+            'status_update',
+            'manual_confirm',
+            'webhook_confirm',
+            'webhook_cancel'
+        ]);
+
+        if (allowed.has(normalized)) {
+            return normalized;
+        }
+
+        if (normalized.startsWith('outbound') || normalized.startsWith('inbound')) {
+            return normalized;
+        }
+
+        return fallback;
+    }
+
+    normalizeMetadata(metadata) {
+        if (metadata === undefined || metadata === null) {
+            return null;
+        }
+
+        if (typeof metadata === 'string') {
+            const trimmed = metadata.trim();
+            if (!trimmed) {
+                return null;
+            }
+            try {
+                return JSON.parse(trimmed);
+            } catch (_) {
+                return { value: trimmed.slice(0, 4000) };
+            }
+        }
+
+        if (metadata instanceof Date) {
+            return { timestamp: metadata.toISOString() };
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(metadata));
+        } catch (_) {
+            return { value: String(metadata).slice(0, 4000) };
+        }
+    }
+
+    async logOutboundMessage({
+        appointmentId,
+        phone,
+        messageId,
+        type,
+        templateName,
+        status,
+        body = null,
+        direction = null,
+        metadata = null,
+        errorDetails = null,
+        retryCount = 0,
+        nextRetryAt = null,
+        lastAttemptAt = null
+    }) {
         await this.ensureInitialized();
         await this.initMessageLogs();
 
         const normalizedPhone = this.formatE164(phone) || phone || null;
+        const digitsCandidate = this.phoneDigitsForWhatsapp(phone) || this.sanitizePhone(phone);
+        const phoneDigits = digitsCandidate ? digitsCandidate : null;
         const now = new Date();
         const attemptAt = lastAttemptAt instanceof Date ? lastAttemptAt : now;
         const normalizedError = this.normalizeErrorDetails(errorDetails);
+        const normalizedBody = this.normalizeMessageBody(body);
+        const normalizedDirection = this.normalizeDirection(direction, type === 'template' ? 'outbound_template' : 'outbound');
+        const normalizedMetadata = this.normalizeMetadata(metadata);
         const safeMessageId = messageId || null;
 
         const query = `
             INSERT INTO ${this.schema}.message_logs
-                (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at, retry_count, next_retry_at, last_attempt_at)
+                (appointment_id, phone, phone_digits, message_id, type, template_name, status, body, direction, metadata, error_details, created_at, updated_at, retry_count, next_retry_at, last_attempt_at)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, $15)
             ON CONFLICT (message_id) DO UPDATE
                 SET appointment_id = EXCLUDED.appointment_id,
                     phone = EXCLUDED.phone,
+                    phone_digits = EXCLUDED.phone_digits,
                     type = EXCLUDED.type,
                     template_name = EXCLUDED.template_name,
                     status = EXCLUDED.status,
+                    body = EXCLUDED.body,
+                    direction = EXCLUDED.direction,
+                    metadata = EXCLUDED.metadata,
                     error_details = EXCLUDED.error_details,
                     updated_at = EXCLUDED.updated_at,
                     retry_count = EXCLUDED.retry_count,
@@ -334,10 +546,14 @@ class DatabaseService {
         const params = [
             appointmentId ? String(appointmentId) : null,
             normalizedPhone,
+            phoneDigits,
             safeMessageId,
             type || null,
             templateName || null,
             status || null,
+            normalizedBody,
+            normalizedDirection,
+            normalizedMetadata,
             normalizedError,
             now,
             retryCount,
@@ -1573,6 +1789,365 @@ class DatabaseService {
         });
 
         return combined.slice(0, limit);
+    }
+
+    async listConversationThreads({ limit = 30, search = null, lookbackHours = 720 } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 200);
+        const safeLookback = Math.min(Math.max(Number(lookbackHours) || 720, 1), 24 * 365);
+
+        let textSearchTokens = [];
+        let digitSearchValue = null;
+        if (search && typeof search === 'string') {
+            const trimmed = search.trim();
+            if (trimmed) {
+                textSearchTokens = trimmed
+                    .toLowerCase()
+                    .split(/\s+/)
+                    .filter(Boolean);
+                const digits = (trimmed.match(/\d+/g) || []).join('');
+                if (digits) {
+                    digitSearchValue = digits;
+                }
+            }
+        }
+
+        const sampleMultiplier = textSearchTokens.length > 0 ? 40 : 15;
+        const sampleSize = Math.min(Math.max(safeLimit * sampleMultiplier, safeLimit), 5000);
+
+        const params = [safeLookback];
+        let digitClause = '';
+        let digitParamIndex = null;
+        if (digitSearchValue) {
+            digitParamIndex = params.length + 1;
+            params.push(`%${digitSearchValue}%`);
+            digitClause = `
+        AND phone_key LIKE $${digitParamIndex}`;
+        }
+
+        const sampleParamIndex = params.length + 1;
+        params.push(sampleSize);
+        const finalParamIndex = params.length + 1;
+        params.push(safeLimit);
+
+        const query = `
+            WITH base AS (
+                SELECT
+                    ml.id,
+                    ml.appointment_id,
+                    ml.message_id,
+                    ml.type,
+                    ml.template_name,
+                    ml.status,
+                    ml.body,
+                    ml.direction,
+                    ml.metadata,
+                    ml.error_details,
+                    ml.phone,
+                    ml.phone_digits,
+                    COALESCE(ml.updated_at, ml.created_at) AS ts,
+                    COALESCE(
+                        NULLIF(ml.phone_digits, ''),
+                        regexp_replace(COALESCE(ml.phone, ''), '[^0-9]', '', 'g')
+                    ) AS phone_key,
+                    CASE
+                        WHEN (ml.appointment_id)::text ~ '^[0-9]+$' THEN (ml.appointment_id)::text::bigint
+                        ELSE NULL
+                    END AS appointment_id_numeric
+                FROM ${this.schema}.message_logs ml
+                WHERE COALESCE(ml.updated_at, ml.created_at) >= NOW() - make_interval(hours => $1)
+            ),
+            filtered AS (
+                SELECT *
+                FROM base
+                WHERE phone_key IS NOT NULL AND phone_key <> ''${digitClause}
+                ORDER BY ts DESC
+                LIMIT $${sampleParamIndex}
+            ),
+            stats AS (
+                SELECT
+                    phone_key,
+                    MAX(ts) AS last_timestamp,
+                    MAX(CASE WHEN direction = 'inbound' THEN ts END) AS last_inbound_at,
+                    MAX(CASE WHEN direction LIKE 'outbound%' THEN ts END) AS last_outbound_at,
+                    COUNT(*) FILTER (WHERE direction = 'inbound' AND ts >= NOW() - INTERVAL '48 hours') AS inbound_last48,
+                    COUNT(*) FILTER (WHERE direction LIKE 'outbound%' AND ts >= NOW() - INTERVAL '48 hours') AS outbound_last48,
+                    BOOL_OR(direction = 'inbound' AND ts >= NOW() - INTERVAL '24 hours') AS needs_response
+                FROM filtered
+                GROUP BY phone_key
+            ),
+            latest AS (
+                SELECT DISTINCT ON (phone_key)
+                    phone_key,
+                    id,
+                    appointment_id,
+                    message_id,
+                    type,
+                    template_name,
+                    status,
+                    body,
+                    direction,
+                    metadata,
+                    error_details,
+                    phone,
+                    phone_digits,
+                    ts,
+                    appointment_id_numeric
+                FROM filtered
+                ORDER BY phone_key, ts DESC
+            )
+            SELECT
+                stats.phone_key,
+                stats.last_timestamp,
+                stats.last_inbound_at,
+                stats.last_outbound_at,
+                stats.inbound_last48,
+                stats.outbound_last48,
+                stats.needs_response,
+                latest.id AS last_id,
+                latest.appointment_id,
+                latest.message_id,
+                latest.type AS last_type,
+                latest.template_name AS last_template_name,
+                latest.status AS last_status,
+                latest.body AS last_body,
+                latest.direction AS last_direction,
+                latest.metadata AS last_metadata,
+                latest.error_details AS last_error_details,
+                latest.phone AS last_phone,
+                latest.phone_digits AS last_phone_digits,
+                latest.ts AS last_ts,
+                latest.appointment_id_numeric
+            FROM stats
+            JOIN latest ON latest.phone_key = stats.phone_key
+            ORDER BY stats.last_timestamp DESC
+            LIMIT $${finalParamIndex}
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+
+        if (!rows.length) {
+            return [];
+        }
+
+        const appointmentIds = new Set();
+        const phoneDigitsSet = new Set();
+
+        const baseThreads = rows.map((row) => {
+            if (row.appointment_id_numeric) {
+                appointmentIds.add(Number(row.appointment_id_numeric));
+            }
+            if (row.phone_key) {
+                phoneDigitsSet.add(row.phone_key);
+            }
+
+            let metadata = row.last_metadata;
+            if (metadata && typeof metadata === 'string') {
+                try {
+                    metadata = JSON.parse(metadata);
+                } catch (_) {
+                    metadata = { raw: metadata };
+                }
+            }
+
+            const lastTimestamp = row.last_ts ? new Date(row.last_ts) : null;
+            const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
+            const lastOutbound = row.last_outbound_at ? new Date(row.last_outbound_at) : null;
+
+            const phoneDisplay = row.last_phone
+                || (row.last_phone_digits ? `+${row.last_phone_digits.replace(/^\+/, '')}` : null)
+                || (row.phone_key ? `+${row.phone_key}` : null);
+
+            return {
+                phoneKey: row.phone_key,
+                phoneDisplay: phoneDisplay || null,
+                appointmentId: row.appointment_id_numeric ? Number(row.appointment_id_numeric) : null,
+                lastMessage: {
+                    id: row.last_id,
+                    messageId: row.message_id || null,
+                    body: row.last_body || null,
+                    status: row.last_status || null,
+                    type: row.last_type || null,
+                    direction: row.last_direction || null,
+                    metadata,
+                    errorDetails: row.last_error_details || null,
+                    templateName: row.last_template_name || null,
+                    timestamp: lastTimestamp
+                },
+                lastInboundAt: lastInbound,
+                lastOutboundAt: lastOutbound,
+                lastTimestamp,
+                inboundCount48h: Number(row.inbound_last48 || 0),
+                outboundCount48h: Number(row.outbound_last48 || 0),
+                needsResponse: Boolean(row.needs_response)
+            };
+        });
+
+        const [appointmentDetails, scheduleByPhone] = await Promise.all([
+            this.fetchAppointmentDetailsByIds(Array.from(appointmentIds)),
+            this.fetchLatestScheduleByPhoneDigits(Array.from(phoneDigitsSet))
+        ]);
+
+        const threads = baseThreads.map((thread) => {
+            const appointmentInfo = thread.appointmentId ? appointmentDetails.get(thread.appointmentId) : null;
+            const phoneInfo = scheduleByPhone.get(thread.phoneKey);
+
+            return {
+                ...thread,
+                patientName: appointmentInfo?.patientName || phoneInfo?.patientName || null,
+                mainProcedureTerm: appointmentInfo?.mainProcedureTerm || phoneInfo?.mainProcedureTerm || null,
+                patientContacts: appointmentInfo?.patientContacts || phoneInfo?.patientContacts || null
+            };
+        });
+
+        if (textSearchTokens.length > 0) {
+            const filtered = threads.filter((thread) => {
+                const haystack = [
+                    thread.patientName || '',
+                    thread.phoneDisplay || '',
+                    thread.lastMessage?.body || '',
+                    thread.mainProcedureTerm || ''
+                ]
+                    .map((value) => value.toLowerCase())
+                    .join(' ');
+
+                return textSearchTokens.every((token) => haystack.includes(token));
+            });
+            return filtered.slice(0, safeLimit);
+        }
+
+        return threads.slice(0, safeLimit);
+    }
+
+    async getConversationMessages(phoneKey, { limit = 100, before = null } = {}) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const normalizedKey = String(phoneKey || '').replace(/\D/g, '');
+        if (!normalizedKey) {
+            return [];
+        }
+
+        const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
+        const params = [normalizedKey];
+        let beforeClause = '';
+        if (before instanceof Date && !Number.isNaN(before.getTime())) {
+            params.push(before);
+            beforeClause = `
+            AND COALESCE(ml.updated_at, ml.created_at) < $2`;
+        }
+        const limitParamIndex = params.length + 1;
+        params.push(safeLimit);
+
+        const query = `
+            SELECT
+                ml.id,
+                ml.appointment_id,
+                ml.message_id,
+                ml.type,
+                ml.template_name,
+                ml.status,
+                ml.body,
+                ml.direction,
+                ml.metadata,
+                ml.error_details,
+                ml.phone,
+                ml.phone_digits,
+                ml.created_at,
+                ml.updated_at
+            FROM ${this.schema}.message_logs ml
+            WHERE COALESCE(NULLIF(ml.phone_digits, ''), regexp_replace(COALESCE(ml.phone, ''), '[^0-9]', '', 'g')) = $1
+            ${beforeClause}
+            ORDER BY COALESCE(ml.updated_at, ml.created_at) DESC
+            LIMIT $${limitParamIndex}
+        `;
+
+        const { rows } = await this.pool.query(query, params);
+
+        const messages = rows.map((row) => {
+            let metadata = row.metadata;
+            if (metadata && typeof metadata === 'string') {
+                try {
+                    metadata = JSON.parse(metadata);
+                } catch (_) {
+                    metadata = { raw: metadata };
+                }
+            }
+
+            const createdAt = row.created_at ? new Date(row.created_at) : null;
+            const updatedAt = row.updated_at ? new Date(row.updated_at) : null;
+            const timestamp = updatedAt || createdAt;
+
+            return {
+                id: row.id,
+                appointmentId: row.appointment_id ? Number(row.appointment_id) : null,
+                messageId: row.message_id || null,
+                type: row.type || null,
+                templateName: row.template_name || null,
+                status: row.status || null,
+                body: row.body || null,
+                direction: row.direction || null,
+                metadata,
+                errorDetails: row.error_details || null,
+                phone: row.phone || null,
+                phoneDigits: row.phone_digits || null,
+                createdAt,
+                updatedAt,
+                timestamp
+            };
+        });
+
+        return messages.reverse();
+    }
+
+    async getConversationSession(phoneKey) {
+        await this.ensureInitialized();
+        await this.initMessageLogs();
+
+        const variations = this.buildPhoneVariations(phoneKey);
+        if (!variations.length) {
+            return {
+                phoneKey: null,
+                lastInboundAt: null,
+                lastOutboundAt: null,
+                lastMessageAt: null
+            };
+        }
+
+        const digits = variations
+            .map((value) => (value.match(/\d+/g) || []).join(''))
+            .filter(Boolean);
+
+        if (!digits.length) {
+            return {
+                phoneKey: null,
+                lastInboundAt: null,
+                lastOutboundAt: null,
+                lastMessageAt: null
+            };
+        }
+
+        const query = `
+            SELECT
+                MAX(CASE WHEN direction = 'inbound' THEN COALESCE(updated_at, created_at) END) AS last_inbound_at,
+                MAX(CASE WHEN direction LIKE 'outbound%' THEN COALESCE(updated_at, created_at) END) AS last_outbound_at,
+                MAX(COALESCE(updated_at, created_at)) AS last_message_at
+            FROM ${this.schema}.message_logs
+            WHERE phone_digits = ANY($1)
+               OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = ANY($1)
+        `;
+
+        const { rows } = await this.pool.query(query, [digits]);
+        const row = rows[0] || {};
+
+        return {
+            phoneKey: digits[0] || null,
+            lastInboundAt: row.last_inbound_at ? new Date(row.last_inbound_at) : null,
+            lastOutboundAt: row.last_outbound_at ? new Date(row.last_outbound_at) : null,
+            lastMessageAt: row.last_message_at ? new Date(row.last_message_at) : null
+        };
     }
 
     async getMessageLogStats({ startDate = null, endDate = null } = {}) {
