@@ -1588,20 +1588,27 @@ class DatabaseService {
             const phoneDigits = this.phoneDigitsForWhatsapp(metadata.phone) || null;
             const messageTime = metadata.timestamp ? Number(metadata.timestamp) : this.getEpochSeconds();
             const directionHint = metadata.direction || (metadata.messageBody ? 'incoming' : null);
-            const descriptionSuffix = directionHint ? `_${directionHint}` : '';
-            let baseDescription = 'status_update';
+            let statusHint = null;
 
             if (statusId === 3) {
-                baseDescription = 'confirmed';
+                statusHint = 'confirmed';
             } else if (statusId === 2) {
-                baseDescription = 'cancelled';
+                statusHint = 'cancelled';
             } else if (statusId === 4) {
-                baseDescription = 'delivered';
+                statusHint = 'delivered';
             } else if (statusId === 1) {
-                baseDescription = 'sent';
+                statusHint = 'sent';
             }
 
-            const description = `${baseDescription}${descriptionSuffix}`;
+            const descriptionParts = ['status_update'];
+            if (statusHint) {
+                descriptionParts.push(statusHint);
+            }
+            if (directionHint) {
+                descriptionParts.push(directionHint);
+            }
+
+            const description = descriptionParts.join('_');
 
             let appointmentId = metadata.appointmentId || null;
             if (!appointmentId) {
@@ -1661,9 +1668,9 @@ class DatabaseService {
                 ]);
             }
 
-            const shouldUpdateLog = ['confirmed', 'cancelled', 'delivered', 'sent'].includes(baseDescription);
+            const shouldUpdateLog = statusHint ? ['confirmed', 'cancelled', 'delivered', 'sent'].includes(statusHint) : false;
             if (appointmentId && shouldUpdateLog) {
-                await this.updateLatestLogStatus(appointmentId, baseDescription, client);
+                await this.updateLatestLogStatus(appointmentId, statusHint, client);
             }
 
             await client.query('COMMIT');
