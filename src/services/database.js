@@ -1604,7 +1604,7 @@ class DatabaseService {
             if (statusHint) {
                 descriptionParts.push(statusHint);
             }
-            if (directionHint) {
+            if (!statusHint && directionHint) {
                 descriptionParts.push(directionHint);
             }
 
