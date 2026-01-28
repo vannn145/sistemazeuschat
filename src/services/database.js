@@ -84,6 +84,7 @@ class DatabaseService {
         this.demoMode = false;
         this.isConnected = false;
         this.initPromise = null;
+        this.scheduleViewColumns = null;
     }
 
     async ensureInitialized() {
@@ -388,6 +389,36 @@ class DatabaseService {
         await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS direction TEXT`);
         await this.pool.query(`ALTER TABLE ${this.schema}.message_logs ADD COLUMN IF NOT EXISTS metadata JSONB`);
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_message_logs_phone_digits ON ${this.schema}.message_logs (phone_digits)`);
+    }
+
+    async loadScheduleViewColumns() {
+        if (this.scheduleViewColumns !== null) {
+            return;
+        }
+
+        try {
+            const { rows } = await this.pool.query(
+                `SELECT column_name
+                 FROM information_schema.columns
+                 WHERE table_schema = $1 AND table_name = $2`,
+                [this.schema, 'schedule_v']
+            );
+            this.scheduleViewColumns = new Set(rows.map((row) => row.column_name));
+        } catch (err) {
+            console.log('[DatabaseService] Falha ao inspecionar colunas de schedule_v:', err.message);
+            this.scheduleViewColumns = new Set();
+        }
+    }
+
+    async hasScheduleViewColumn(columnName) {
+        if (!columnName) {
+            return false;
+        }
+
+        await this.ensureInitialized();
+        await this.loadScheduleViewColumns();
+
+        return this.scheduleViewColumns.has(String(columnName));
     }
 
     normalizeErrorDetails(details) {
@@ -1401,10 +1432,10 @@ class DatabaseService {
         }
 
         const setters = [];
-        if (confirmed !== null) {
+        if (confirmed !== null && await this.hasScheduleViewColumn('confirmed')) {
             setters.push(`confirmed = ${confirmed ? 'true' : 'false'}`);
         }
-        if (active !== null) {
+        if (active !== null && await this.hasScheduleViewColumn('active')) {
             setters.push(`active = ${active ? 'true' : 'false'}`);
         }
 
@@ -1539,7 +1570,14 @@ class DatabaseService {
         await this.initMessageLogs();
         await this.pool.query(
             `INSERT INTO ${this.schema}.message_logs (appointment_id, phone, message_id, type, template_name, status, error_details, created_at, updated_at)
-             VALUES ($1, $2, $3, 'confirmation', $4, 'confirmed', $5, $6, $6)`,
+             VALUES ($1, $2, $3, 'confirmation', $4, 'confirmed', $5, $6, $6)
+             ON CONFLICT (message_id) DO UPDATE
+                SET appointment_id = COALESCE(EXCLUDED.appointment_id, ${this.schema}.message_logs.appointment_id),
+                    phone = COALESCE(EXCLUDED.phone, ${this.schema}.message_logs.phone),
+                    template_name = COALESCE(EXCLUDED.template_name, ${this.schema}.message_logs.template_name),
+                    status = 'confirmed',
+                    error_details = COALESCE(EXCLUDED.error_details, ${this.schema}.message_logs.error_details),
+                    updated_at = EXCLUDED.updated_at`,
             [
                 appointmentId ? String(appointmentId) : null,
                 normalizedPhone,
